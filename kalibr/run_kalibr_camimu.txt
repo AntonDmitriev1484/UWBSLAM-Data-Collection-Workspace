@@ -1,6 +1,0 @@
-rosrun kalibr kalibr_calibrate_imu_camera \
-	--target /data/april_6x6_config.yaml \
-	--imu /data/allan_variance_out/imu_scaled.yaml \
-	--imu-models calibrated \
-	--cam /data/kalibr_cam_calibration_out/cam_target_stereo2-camchain.yaml \
-	--bag /data/ros1/cam_target_stereo2.bag

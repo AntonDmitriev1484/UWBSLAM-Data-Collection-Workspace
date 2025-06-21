@@ -1,0 +1,1 @@
+rosbags-convert --src ros2/pilot1_2/ --dst ros1/pilot1_2.bag   --include-topic /camera/camera/imu --include-topic /camera/camera/infra2/image_rect_raw --include-topic /camera/camera/infra1/image_rect_raw

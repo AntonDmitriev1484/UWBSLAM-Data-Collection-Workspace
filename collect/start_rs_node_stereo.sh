@@ -16,6 +16,8 @@ enable_color:=false \
 enable_infra1:=true \
 enable_infra2:=true \
 depth_module.infra_profile:="640,480,30" \
-depth_module.emitter_enabled:=0
+depth_module.emitter_enabled:=0 \
+clip_distance:=10.0 \
+align_depth:=true
 
 

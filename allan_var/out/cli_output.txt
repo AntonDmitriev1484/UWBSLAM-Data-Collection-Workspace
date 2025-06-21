@@ -1,0 +1,21 @@
+\ACCELEROMETER:
+X Velocity Random Walk:  0.00085 m/s/sqrt(s)  0.05095 m/s/sqrt(hr)
+Y Velocity Random Walk:  0.00206 m/s/sqrt(s)  0.12385 m/s/sqrt(hr)
+Z Velocity Random Walk:  0.00097 m/s/sqrt(s)  0.05844 m/s/sqrt(hr)
+X Bias Instability:  0.00018 m/s^2  2373.26630 m/hr^2
+Y Bias Instability:  0.00092 m/s^2  11953.12464 m/hr^2
+Z Bias Instability:  0.00026 m/s^2  3319.52904 m/hr^2
+X Accel Random Walk:  0.00003 m/s^2/sqrt(s)
+Y Accel Random Walk:  0.00023 m/s^2/sqrt(s)
+Z Accel Random Walk:  0.00007 m/s^2/sqrt(s)
+GYROSCOPE:
+X Angle Random Walk:  0.00820 deg/sqrt(s)  0.49179 deg/sqrt(hr)
+Y Angle Random Walk:  0.01174 deg/sqrt(s)  0.70460 deg/sqrt(hr)
+Z Angle Random Walk:  0.00746 deg/sqrt(s)  0.44736 deg/sqrt(hr)
+X Bias Instability:  0.00076 deg/s  2.72475 deg/hr
+Y Bias Instability:  0.00132 deg/s  4.74903 deg/hr
+Z Bias Instability:  0.00070 deg/s  2.53398 deg/hr
+X Rate Random Walk:  0.00011 deg/s/sqrt(s)
+Y Rate Random Walk:  0.00018 deg/s/sqrt(s)
+Z Rate Random Walk:  0.00009 deg/s/sqrt(s)
+Writing Kalibr imu.yaml file.

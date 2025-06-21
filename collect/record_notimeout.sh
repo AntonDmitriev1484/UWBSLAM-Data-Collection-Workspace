@@ -5,6 +5,8 @@ if [ $# -lt 2 ]; then
   exit 1
 fi
 
+cd ros2/
+
 DELAY=$1
 BAG_NAME=$2
 

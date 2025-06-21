@@ -2,17 +2,16 @@
 
 # Usage check
 if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 <bag_filename>"
+    echo "Usage: $0 <bag_filename no .bag>"
     exit 1
 fi
 
 BAG_FILE="$1"
 
-rosrun kalibr kalibr_calibrate_cameras \
-    --bag "../collect/ros1/${BAG_FILE}" \
+rosrun kalibr kalibr_calibrate_imu_camera \
+    --bag "/data/collect/ros1/${BAG_FILE}.bag" \
     --target ./april_6x6_config.yaml \
-    --models pinhole-radtan pinhole-radtan \
-	--imu ../allan_var/imu_scaled.yaml \
+	--imu /data/allan_var/out/imu_scaled.yaml \
 	--imu-models calibrated \
-    --topics /camera/camera/infra1/image_rect_raw /camera/camera/infra2/image_rect_raw
+	--cam "./cam_out/${BAG_FILE}-camchain.yaml" \
 

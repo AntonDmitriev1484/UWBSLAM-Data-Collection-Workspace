@@ -1,9 +1,7 @@
 
 from pathlib import Path
-
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
-
 from rosbags.typesys import get_types_from_idl, get_types_from_msg
 
 import pkgutil

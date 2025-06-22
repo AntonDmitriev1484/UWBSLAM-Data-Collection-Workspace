@@ -1,24 +1,25 @@
 
 from pathlib import Path
-
-from rosbags.highlevel import AnyReader
-from rosbags.typesys import Stores, get_typestore
-
-from rosbags.typesys import get_types_from_idl, get_types_from_msg
-
 import pkgutil
 import importlib
 import inspect
 import os
 import json
+import csv
+import yaml
 import argparse
 
 import cv2
 import numpy as np
 
-import csv
-
 from scipy.spatial.transform import Rotation as R
+
+from utils.load_rostypes import *
+from utils.ros_msg_handlers import *
+
+
+from pupil_apriltags import Detector
+
 
 
 parser = argparse.ArgumentParser(description="Stream collector")
@@ -46,99 +47,7 @@ os.makedirs(out_depth, exist_ok=True)
 
 bagpath = Path(f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}')
 
-add_types = {}
 
-# Guide for handling types external to main ROS
-# https://ternaris.gitlab.io/rosbags/topics/typesys.html
-
-# Add Beluga custom message types
-beluga_msg_dir = '/home/admi3ev/Beluga-Firmware-Mod/ROS/src/beluga_messages/msg'
-for msg_name in os.listdir(beluga_msg_dir):
-    filepath = beluga_msg_dir+f"/{msg_name}"
-
-    msg_definition = Path(filepath).read_text()
-    msg_name = f"beluga_messages/msg/{msg_name.removesuffix('.msg')}"
-    add_types.update(get_types_from_msg(msg_definition, msg_name))
-
-# Add Realsense custom message types
-realsense_msg_dir = '/opt/ros/humble/share/realsense2_camera_msgs/msg'
-for msg_name in os.listdir(realsense_msg_dir):
-    if '.msg' in msg_name:
-        filepath = realsense_msg_dir+f"/{msg_name}"
-        msg_definition = Path(filepath).read_text()
-        msg_name = f"realsense2_camera_msgs/msg/{msg_name.removesuffix('.msg')}"
-        add_types.update(get_types_from_msg(msg_definition, msg_name))
-
-print(add_types)
-
-# Create a type store to use if the bag has no message definitions.
-typestore = get_typestore(Stores.ROS2_HUMBLE)
-typestore.register(add_types)
-
-def proc_range(msg): #TODO update this to new UWB topic
-    msg = msg.ranges[0]
-    timestamp = msg.timestamp.sec + (msg.timestamp.nanosec * 1e-9)
-
-    j = {
-        "t":timestamp,
-        "type": "uwb",
-        "id": msg.id,
-        "range": msg.range,
-        "exchange": msg.exchange,
-        "maxnoise": msg.maxnoise,
-        "firstpathamp1": msg.firstpathamp1,
-        "firstpathamp2": msg.firstpathamp2,
-        "firstpathamp3": msg.firstpathamp3,
-        "stdnoise": msg.stdnoise,
-        "maxgrowthcir": msg.maxgrowthcir,
-        "rxpreamcount": msg.rxpreamcount,
-        "firstpath": msg.firstpath
-    }
-
-    print(j)
-
-    return j
-
-def proc_rgb_frame(msg):
-    #rgb8 encoding
-
-    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    encoding = msg.encoding
-    arr = msg.data
-
-    # Make new file in out_rgb, labeled with timestamp.
-    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width, 3))
-    name = str(timestamp)+".png"
-    cv2.imwrite(out_rgb+"/"+name, cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)) # Not exactly sure what cvtColor does...
-
-    return {"t":timestamp, "type":"rgb", "name":name}
-
-def proc_depth_frame(msg):
-    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    encoding = msg.encoding
-    arr = msg.data
-
-    img_np = np.frombuffer(arr, dtype=np.uint16).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
-    name = str(timestamp)+".png"
-    cv2.imwrite(out_depth+"/"+name, img_np)
-
-    return {"t":timestamp, "type":"depth", "name":name}
-
-
-imu_count = 0
-# I set it to unify accel and gyro, does unified accel and gyro go to the accel topic?
-def proc_imu(msg):
-
-    # I should be looking at a topic called 'imu' -> Interesting, I think I forgot to listen to this topic.
-    # Despite unite_imu being set to 2, there is no 'imu' topic available in the ros2 topics list
-
-    # print(msg)
-    global imu_count 
-    imu_count +=1
-
-    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    return {"t":timestamp, "type":"imu", "ax": msg.linear_acceleration.x, "ay": msg.linear_acceleration.y, "az": msg.linear_acceleration.z, 
-            "gx":msg.angular_velocity.x, "gy": msg.angular_velocity.y, "gz":msg.angular_velocity.z}
 
 def quat_to_HTM(nparr):
     translation = nparr[1:4]
@@ -159,10 +68,11 @@ def quat_to_HTM(nparr):
 
     return H
 
-SLAM_TO_WORLD_FRAME = 
 
 def proc_gt(nparr):
     pose_slam_frame = quat_to_HTM(nparr)
+    # TODO: SLAM_TO_WORLD_FRAME
+    SLAM_TO_WORLD_FRAME = None
     pose_world_frame = SLAM_TO_WORLD_FRAME * pose_slam_frame
 
     timestamp = (nparr[0] * 1e-9)
@@ -183,19 +93,39 @@ def proc_kf(nparr):
     # return {"t":timestamp, "type":"kf_pose", "x": nparr[1], "y": nparr[2], "z":nparr[3], "qx": nparr[4], "qy":nparr[5], "qz":nparr[6], "qw":nparr[7]}
 
 
+
+TAG_POSE = True
+KALIBR_CAMIMU_PATH = f"../kalibr/camimu_out/{trial_name}-camchain-imucam.yaml"
+with open(KALIBR_CAMIMU_PATH, 'r') as fs: calibration = yaml.safe_load(fs)
+# Remember CAM0 corresponds to infra1
+CAM0_INTRINSICS = tuple(calibration['cam0']['intrinsics'])
+TAG_SIZE = 0.100 #10cm tags
+
+def extract_AprilTag_pose(cam0_images):
+    # Maybe I've just set up my detector to look for the wrong tag type?
+    at_detector = Detector(
+        families="tag36h11",
+        nthreads=1,
+        quad_decimate=1.0,
+        quad_sigma=0.0,
+        refine_edges=1,
+        decode_sharpening=0.25,
+        debug=0
+    )
+    # Find the frame at the first SLAM KF timestamp. That will let us process the AprilTag at SLAM frame origin.
+    # Remember that you should pass an array of nparray style images from cam0 for 'cam0_images'
+
+    for image in cam0_images:
+        detections = at_detector.detect(image, TAG_POSE, CAM0_INTRINSICS, TAG_SIZE)
+
+
+
 topic_to_processor_lambda = {
                 '/uwb_ranges': proc_range,
                   '/camera/camera/imu': proc_imu, 
                   '/camera/camera/color/image_raw': proc_rgb_frame, 
                   '/camera/camera/depth/image_rect_raw': proc_depth_frame, 
 }
-# TODO: We can add these later? Transforms between sensors on realsense I hope?
-# /camera/camera/extrinsics/depth_to_accel \
-# /camera/camera/extrinsics/depth_to_color \
-# /camera/camera/extrinsics/depth_to_gyro \
-# /camera/camera/color/metadata seems to contain very useful information, but I'm not sure how to use it at the moment lol
-
-
 
 all_data = []
 
@@ -224,11 +154,6 @@ with AnyReader([bagpath], default_typestore=typestore) as reader:
     gt_data = np.loadtxt(in_gt) # Assuming its formatted as t, x, y, z, quat
     print(f"ROS start: {START} ORBSLAM3 start: {gt_data[0,0]*1e-9}")
     print(f"ROS end: {END} . ORBSLAM3 end: {gt_data[-1, 0]*1e-9}") 
-    # This verifies that the timestamps from the ORBSLAM3 output trajectory are in the same timeframe as the timestamps from the original data.
-    print(f" ROS imu points {imu_count} ORBSLAM3 gt points: {gt_data.shape[0]}")
-    # So it seems like GT was generated at 20Hz, where IMU runs at 200Hz
-    # Rather than doing any kind of interpolation on GT, we're just going to add it into the datastream
-    # and feed in a GT pose whenever it appears chronologically.
 
     for i in range(gt_data.shape[0]):
         gt_json = proc_gt(gt_data[i,:])

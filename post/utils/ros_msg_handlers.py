@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-def proc_range(msg): #TODO update this to new UWB topic
+def proc_range(msg, arr_ref): #TODO update this to new UWB topic
     msg = msg.ranges[0]
     timestamp = msg.timestamp.sec + (msg.timestamp.nanosec * 1e-9)
 
@@ -21,9 +21,13 @@ def proc_range(msg): #TODO update this to new UWB topic
         "firstpath": msg.firstpath
     }
 
+    csv_row = []
+    for k, v in j.items(): csv_row.append(v)
+    arr_ref.append(csv_row)
+
     return j
 
-def proc_rgb_frame(msg):
+def proc_rgb_frame(msg, arr_ref):
     #rgb8 encoding
 
     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
@@ -37,7 +41,7 @@ def proc_rgb_frame(msg):
 
     return {"t":timestamp, "type":"rgb", "name":name}
 
-def proc_depth_frame(msg):
+def proc_depth_frame(msg, arr_ref):
     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
     encoding = msg.encoding
     arr = msg.data
@@ -48,13 +52,41 @@ def proc_depth_frame(msg):
 
     return {"t":timestamp, "type":"depth", "name":name}
 
+def proc_infra1_frame(msg, arr_ref):
+    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
+    encoding = msg.encoding
+    arr = msg.data
+
+    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
+    arr_ref.append({"t":timestamp, "raw": img_np})
+
+    name = str(timestamp) +".png"
+    return {"t":timestamp, "type":"infra1", "name":name}
+
+def proc_infra2_frame(msg, arr_ref):
+    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
+    encoding = msg.encoding
+    arr = msg.data
+
+    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
+    arr_ref.append({"t":timestamp, "raw": img_np})
+    name = str(timestamp) +".png"
+
+    return {"t":timestamp, "type":"infra2", "name":name}
 
 # I set it to unify accel and gyro, does unified accel and gyro go to the accel topic?
-def proc_imu(msg):
+def proc_imu(msg, arr_ref):
 
     # I should be looking at a topic called 'imu' -> Interesting, I think I forgot to listen to this topic.
     # Despite unite_imu being set to 2, there is no 'imu' topic available in the ros2 topics list
 
     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    return {"t":timestamp, "type":"imu", "ax": msg.linear_acceleration.x, "ay": msg.linear_acceleration.y, "az": msg.linear_acceleration.z, 
+    j = {"t":timestamp, "type":"imu", "ax": msg.linear_acceleration.x, "ay": msg.linear_acceleration.y, "az": msg.linear_acceleration.z, 
             "gx":msg.angular_velocity.x, "gy": msg.angular_velocity.y, "gz":msg.angular_velocity.z}
+
+
+    csv_row = []
+    for k, v in j.items(): csv_row.append(v)
+    arr_ref.append(csv_row)
+
+    return j

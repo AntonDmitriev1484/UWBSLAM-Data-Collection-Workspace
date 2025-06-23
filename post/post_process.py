@@ -112,7 +112,6 @@ with AnyReader([bagpath], default_typestore=load_rostypes()) as reader:
         # if timestamp * 1e-9 >= ZERO_TIMESTAMP: # Cut raw data stream to start when ORBSLAM produces its first estimate
         msg = reader.deserialize(rawdata, connection.msgtype)
         proc, arr_ref = topic_to_processing[connection.topic]
-        #all_data.append(proc(msg, arr_ref))
         proc(msg, arr_ref)
 
 
@@ -120,7 +119,10 @@ Transforms = SimpleNamespace()
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 
+# Processors functions can buffer data in arr_ref.
+# This is useful for writing files to separate datastreams.
 
+# Then, lastly, we can create all.json using the buffered measurements.
 
 
 START = reader.start_time * 1e-9

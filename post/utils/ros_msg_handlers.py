@@ -21,58 +21,63 @@ def proc_range(msg, arr_ref): #TODO update this to new UWB topic
         "firstpath": msg.firstpath
     }
 
-    csv_row = []
-    for k, v in j.items(): csv_row.append(v)
-    arr_ref.append(csv_row)
+    arr_ref.append(j)
+
+    # csv_row = []
+    # for k, v in j.items(): csv_row.append(v)
+    # arr_ref.append(csv_row)
 
     return j
 
-def proc_rgb_frame(msg, arr_ref):
-    #rgb8 encoding
+# def proc_rgb_frame(msg, arr_ref):
+#     #rgb8 encoding
 
-    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    encoding = msg.encoding
-    arr = msg.data
+#     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
+#     encoding = msg.encoding
+#     arr = msg.data
 
-    # Make new file in out_rgb, labeled with timestamp.
-    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width, 3))
-    name = str(timestamp)+".png"
-    cv2.imwrite(out_rgb+"/"+name, cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)) # Not exactly sure what cvtColor does...
+#     # Make new file in out_rgb, labeled with timestamp.
+#     img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width, 3))
+#     name = str(timestamp)+".png"
+#     cv2.imwrite(out_rgb+"/"+name, cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)) # Not exactly sure what cvtColor does...
 
-    return {"t":timestamp, "type":"rgb", "name":name}
+#     return {"t":timestamp, "type":"rgb", "name":name}
 
-def proc_depth_frame(msg, arr_ref):
-    timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    encoding = msg.encoding
-    arr = msg.data
+# def proc_depth_frame(msg, arr_ref):
+#     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
+#     encoding = msg.encoding
+#     arr = msg.data
 
-    img_np = np.frombuffer(arr, dtype=np.uint16).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
-    name = str(timestamp)+".png"
-    cv2.imwrite(out_depth+"/"+name, img_np)
+#     img_np = np.frombuffer(arr, dtype=np.uint16).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
+#     name = str(timestamp)+".png"
+#     cv2.imwrite(out_depth+"/"+name, img_np)
 
-    return {"t":timestamp, "type":"depth", "name":name}
+#     return {"t":timestamp, "type":"depth", "name":name}
 
 def proc_infra1_frame(msg, arr_ref):
     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
     encoding = msg.encoding
     arr = msg.data
 
-    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
-    arr_ref.append({"t":timestamp, "raw": img_np})
-
     name = str(timestamp) +".png"
-    return {"t":timestamp, "type":"infra1", "name":name}
+    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
+
+    j = {"t":timestamp, "type":"infra1", "name":name, "raw": img_np}
+    arr_ref.append(j)
+
+    return j
 
 def proc_infra2_frame(msg, arr_ref):
     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
     encoding = msg.encoding
     arr = msg.data
-
-    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
-    arr_ref.append({"t":timestamp, "raw": img_np})
     name = str(timestamp) +".png"
+    img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
+    
+    j = {"t":timestamp, "type":"infra2", "name":name, "raw": img_np}
+    arr_ref.append(j)
 
-    return {"t":timestamp, "type":"infra2", "name":name}
+    return j
 
 # I set it to unify accel and gyro, does unified accel and gyro go to the accel topic?
 def proc_imu(msg, arr_ref):
@@ -84,9 +89,10 @@ def proc_imu(msg, arr_ref):
     j = {"t":timestamp, "type":"imu", "ax": msg.linear_acceleration.x, "ay": msg.linear_acceleration.y, "az": msg.linear_acceleration.z, 
             "gx":msg.angular_velocity.x, "gy": msg.angular_velocity.y, "gz":msg.angular_velocity.z}
 
+    arr_ref.append(j)
 
-    csv_row = []
-    for k, v in j.items(): csv_row.append(v)
-    arr_ref.append(csv_row)
+    # csv_row = []
+    # for k, v in j.items(): csv_row.append(v)
+    # arr_ref.append(csv_row)
 
     return j

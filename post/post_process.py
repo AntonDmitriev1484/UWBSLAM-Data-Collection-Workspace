@@ -14,6 +14,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from types import SimpleNamespace
 
+import shutil
+
 from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
 from utils.apriltag import *
@@ -33,14 +35,10 @@ args = parser.parse_args()
 
 
 outpath = f'./out/{args.trial_name}_post'
-out_rgb = f'./out/{args.trial_name}_post/rgb'
-out_depth = f'./out/{args.trial_name}_post/depth'
-out_infra1 = f'./out/{args.trial_name}_post/infra1'
-out_infra2 = f'./out/{args.trial_name}_post/infra2'
-out_ml = f'./out/{args.trial_name}_post/ml'
+out_infra1 = f'{outpath}/infra1'
+out_infra2 = f'{outpath}/infra2'
+out_ml = f'{outpath}/ml'
 os.makedirs(outpath, exist_ok=True)
-os.makedirs(out_rgb, exist_ok=True)
-os.makedirs(out_depth, exist_ok=True)
 os.makedirs(out_infra1, exist_ok=True)
 os.makedirs(out_infra2, exist_ok=True)
 os.makedirs(out_ml, exist_ok=True)
@@ -57,30 +55,6 @@ slam_kf_data = np.loadtxt(in_slam_kf)
 slam_kf_data[:,0] *= 1e-9
 slam_data = np.loadtxt(in_slam)
 slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
-
-
-def proc_gt(nparr):
-    pose_slam_frame = quat_to_HTM(nparr)
-    # TODO: SLAM_TO_WORLD_FRAME
-    SLAM_TO_WORLD_FRAME = None
-    pose_world_frame = SLAM_TO_WORLD_FRAME * pose_slam_frame
-
-    timestamp = (nparr[0] * 1e-9)
-    #return {"t":timestamp, "type":"gt_pose", "x": nparr[1], "y": nparr[2], "z":nparr[3], "qx": nparr[4], "qy":nparr[5], "qz":nparr[6], "qw":nparr[7]}
-    return {"t":timestamp, "pose_slam": pose_slam_frame, "pose_world": pose_world_frame}
-
-def proc_kf(nparr):
-    # TODO: What frame should the IMU be in? Body or world?
-    # Should I include the pose data estimated by my tracker?
-    # I guess the more the better.
-    # In that case, it might be better to do all of this in the output of my tracker graph.
-
-
-    pose_slam_frame = quat_to_HTM(nparr)
-    pose_world_frame = SLAM_TO_WORLD_FRAME * pose_slam_frame
-
-    timestamp = (nparr[0] * 1e-9)
-    # return {"t":timestamp, "type":"kf_pose", "x": nparr[1], "y": nparr[2], "z":nparr[3], "qx": nparr[4], "qy":nparr[5], "qz":nparr[6], "qw":nparr[7]}
 
 # TODO: 
 # Mark the timestamp of the first cam pose (0,0,0)
@@ -115,41 +89,117 @@ with AnyReader([bagpath], default_typestore=load_rostypes()) as reader:
         proc(msg, arr_ref)
 
 
-Transforms = SimpleNamespace()
-infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
-Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
-
-# Processors functions can buffer data in arr_ref.
-# This is useful for writing files to separate datastreams.
-
-# Then, lastly, we can create all.json using the buffered measurements.
-
-
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
 
-# Now open up and read the GT file into all_data and gt_standalone
 
-gt_data = np.loadtxt(in_slam) # Assuming its formatted as t, x, y, z, quat
-print(f"ROS start: {START} ORBSLAM3 start: {gt_data[0,0]*1e-9}")
-print(f"ROS end: {END} . ORBSLAM3 end: {gt_data[-1, 0]*1e-9}") 
+Transforms = SimpleNamespace()
+infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
+Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 
-for i in range(gt_data.shape[0]):
-    gt_json = proc_gt(gt_data[i,:])
-    all_data.append(gt_json) # Append GT data into the sensor stream to use as Pose3 corrections
-    gt_standalone.append(gt_json) # Append GT into a standalone file if you want an independent fileread GT trajectory
+# Processors functions have now buffered their individual topics into arr_ref
+# This is useful for writing the same datastream to multiple files.
+# Then, lastly, we can create all.json using the buffered measurements.
 
 
-for i in range(kf_data.shape[0]):
-    kf_json = proc_kf(kf_data[i,:])
-    all_data.append(kf_json) # Append GT data into the sensor stream to use as Pose3 corrections
-    kf_standalone.append(kf_json) # Append GT into a standalone file if you want an independent fileread GT trajectory
+### Write UWB data to its own csv file, and to all_data
+uwb_csv = []
+for j in topic_to_processing['/uwb_ranges'][1]:
+    csv_row = []
+    for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
+    uwb_csv.append(csv_row)
+    all_data.append(j)
+
+with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(uwb_csv)
+
+### Write IMU data to its own csv file, and to all_data
+imu_csv = []
+for j in topic_to_processing['/camera/camera/imu'][1]:
+    csv_row = []
+    for k, v in j.items(): csv_row.append(v)
+    imu_csv.append(csv_row)
+    all_data.append(j)
+with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(imu_csv)
+
+### Write SLAM camera trajectory
+slam_data_world_frame = []
+slam_data_slam_frame = []
+for i in range(slam_data.shape[0]):
+
+    T_body_slam = slam_quat_to_HTM(slam_data[i,:])
+    slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
+
+    T_body_world = Transforms.T_slam_world @ T_body_slam
+    slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
+
+    j = {
+        "t": slam_data[i,0],
+        "type": "slam_pose",
+        "T_body_slam" : T_body_slam,
+        "T_body_world" : T_body_world
+    }
+    all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
+
+print(slam_data_world_frame)
+with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_data_world_frame)
+with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_data_slam_frame)
+
+### Write SLAM KF trajectory
+slam_kf_data_world_frame = []
+slam_kf_data_slam_frame = []
+for i in range(slam_kf_data.shape[0]):
+
+    T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
+    slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
+
+    T_body_world = Transforms.T_slam_world @ T_body_slam
+    slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
+
+    j = {
+        "t": slam_kf_data[i,0],
+        "type": "slam_pose",
+        "T_body_slam" : T_body_slam,
+        "T_body_world" : T_body_world
+    }
+    all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
+
+with open(f'{out_ml}/slam_kf_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_kf_data_world_frame)
+with open(f'{out_ml}/slam_kf_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_kf_data_slam_frame)
+
+
+### Write Infra1 frames to output directory, and provide references in all_data
+for j in topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]:
+    cv2.imwrite(out_infra1+"/"+j["name"], j["raw"])
+    j_no_image = { k:v for k,v in j.items() if not (k == "raw") }
+    all_data.append(j_no_image)
+
+### Write Infra2 frames to output directory, and provide references in all_data
+for j in topic_to_processing['/camera/camera/infra2/image_rect_raw'][1]:
+    cv2.imwrite(out_infra2+"/"+j["name"], j["raw"])
+    j_no_image = { k:v for k,v in j.items() if not (k == "raw") }
+    all_data.append(j_no_image)
+
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if hasattr(obj, '__dict__'):
+            return vars(obj)
+        return super().default(obj)
+
+
+
+### Write all world information: transforms, anchors, apriltags, to output
+shutil.copy(in_anchors, f'{outpath}/anchors.json')
+shutil.copy(in_apriltags, f'{outpath}/apriltags.json')
+with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
 all_data = list(filter(lambda x: (START <= x["t"] <= END), all_data))
 all_data = sorted(all_data, key=lambda x: x["t"])
 
-json.dump(all_data, open(outpath+"/all.json", 'w'), indent=1)
-json.dump(gt_standalone, open(out_gt, 'w'), indent=1)
+json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)

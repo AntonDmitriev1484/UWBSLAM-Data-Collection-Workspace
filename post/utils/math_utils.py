@@ -3,7 +3,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-def quat_to_HTM(nparr):
+def slam_quat_to_HTM(nparr):
     translation = nparr[1:4]
     quat = nparr[4:8]
 

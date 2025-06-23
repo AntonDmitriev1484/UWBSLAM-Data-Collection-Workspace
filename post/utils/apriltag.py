@@ -27,6 +27,8 @@ from pupil_apriltags import Detector
 
 
 def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
+    ### The SLAM frame is defined at the starting pose of the IMU in the world frame.
+    ### My body frame, is defined as a rotation out of the IMU frame.
 
     ZERO_TIMESTAMP = slam_data[0][0]
 
@@ -102,7 +104,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # Transforms["T_apriltag_world"]
 
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
-    T_apriltag_world = apriltag_world_locations[detection.tag_id] # Get the world frame location of the center of the tag
+    T_apriltag_world = apriltag_world_locations[str(detection.tag_id)] # Get the world frame location of the center of the tag
     Transforms.T_apriltag_world = T_apriltag_world
 
     T_slam_world = np.linalg.inv( T_cam1_imu @ T_apriltag_cam1) @ T_apriltag_world

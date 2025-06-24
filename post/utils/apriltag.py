@@ -25,6 +25,42 @@ from scipy.spatial.transform import Rotation as R
 from utils.load_rostypes import *
 from dt_apriltags import Detector
 
+import pickle
+
+
+def debug_transforms(Transforms):
+
+    figs = {}
+
+    for name, T in vars(Transforms).items():
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_title(name)
+
+        # Origin
+        origin = T[:3, 3]
+
+        # Axes: unit vectors transformed
+        x_axis = T[:3, :3] @ np.array([1, 0, 0]) + origin
+        y_axis = T[:3, :3] @ np.array([0, 1, 0]) + origin
+        z_axis = T[:3, :3] @ np.array([0, 0, 1]) + origin
+
+        ax.quiver(*origin, *(x_axis - origin), color='r', length=0.1, normalize=True, label='x')
+        ax.quiver(*origin, *(y_axis - origin), color='g', length=0.1, normalize=True, label='y')
+        ax.quiver(*origin, *(z_axis - origin), color='b', length=0.1, normalize=True, label='z')
+
+        ax.set_xlim([origin[0] - 0.1, origin[0] + 0.1])
+        ax.set_ylim([origin[1] - 0.1, origin[1] + 0.1])
+        ax.set_zlim([origin[2] - 0.1, origin[2] + 0.1])
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        figs[name] = fig
+    
+    with open('./debug/transforms.pkl', 'wb') as f:
+        pickle.dump(figs, f)
+
+
 
 def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
     ### The SLAM frame is defined at the starting pose of the IMU in the world frame.
@@ -116,6 +152,10 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     Transforms.T_slam_world = T_slam_world
 
     print(Transforms)
+
+    debug_transforms(Transforms)
+
+
     return Transforms #TODO
 
 

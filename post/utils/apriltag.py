@@ -19,6 +19,8 @@ import yaml
 
 import csv
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+
 
 from scipy.spatial.transform import Rotation as R
 
@@ -27,8 +29,17 @@ from dt_apriltags import Detector
 
 import pickle
 
+from types import SimpleNamespace
 
-def debug_transforms(Transforms):
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if hasattr(obj, '__dict__'):
+            return vars(obj)
+        return super().default(obj)
+
+def debug_transforms(Transforms, name):
 
     figs = {}
 
@@ -57,7 +68,7 @@ def debug_transforms(Transforms):
         ax.set_zlabel('Z')
         figs[name] = fig
     
-    with open('./debug/transforms.pkl', 'wb') as f:
+    with open(f'./debug/{name}.pkl', 'wb') as f:
         pickle.dump(figs, f)
 
 
@@ -129,6 +140,9 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # Syntax T_a_b is "pose of a in frame b"
 
+    rs_frame_dbg = SimpleNamespace()
+
+
     T_tag_april = np.eye(4)
     T_tag_april[:3, :3] = detection.pose_R
     T_tag_april[:3, 3] = detection.pose_t.flatten()
@@ -151,9 +165,23 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_slam_world = np.linalg.inv( T_tag_april @ T_april_cam1 @ T_cam1_imu) @ T_tag_world
     Transforms.T_slam_world = T_slam_world
 
+
+    origin = np.eye(4)
+
+    rs_frame_dbg.T_tag_imu = T_tag_april @ T_april_cam1 @ T_cam1_imu
+    rs_frame_dbg.T_april_imu = T_april_cam1 @ T_cam1_imu
+    rs_frame_dbg.T_cam1_imu = T_cam1_imu
+
+    world_frame_dbg = SimpleNamespace()
+    world_frame_dbg.T_tag_world = T_tag_world
+    world_frame_dbg.origin = origin
+    world_frame_dbg.T_slam_world = T_slam_world
+
     print(Transforms)
 
-    debug_transforms(Transforms)
+    with open(f'/home/admi3ev/ws/post/debug/rs_frame_dbg.json', 'w') as fs: json.dump(vars(rs_frame_dbg),fs, cls=NumpyEncoder, indent=1)
+    with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
+    # debug_transforms(Transforms)
 
 
     return Transforms #TODO

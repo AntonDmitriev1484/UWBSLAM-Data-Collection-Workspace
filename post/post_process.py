@@ -141,7 +141,6 @@ for i in range(slam_data.shape[0]):
     }
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
 
-print(slam_data_world_frame)
 with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_data_world_frame)
 with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_data_slam_frame)
 

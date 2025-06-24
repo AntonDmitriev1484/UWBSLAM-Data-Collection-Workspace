@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
 
 from utils.load_rostypes import *
-from pupil_apriltags import Detector
+from dt_apriltags import Detector
 
 
 def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
@@ -88,26 +88,31 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # Pass a mutable object called transforms through these functions.
 
-    print(detection)
+
+    with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
     # Syntax T_a_b is "pose of a in frame b"
 
-    T_apriltag_cam1 = np.eye(4)
-    T_apriltag_cam1[:3, :3] = detection.pose_R
-    T_apriltag_cam1[:3, 3] = detection.pose_t.flatten()
+    T_tag_april = np.eye(4)
+    T_tag_april[:3, :3] = detection.pose_R
+    T_tag_april[:3, 3] = detection.pose_t.flatten()
+    Transforms.T_tag_april = T_tag_april
 
-    print(T_apriltag_cam1)
-    Transforms.T_apriltag_cam1 = T_apriltag_cam1
+    T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
+    Transforms.T_april_cam1 = T_april_cam1
+
+    # This detection is the location of the tag in apriltag coordinates
+    # TODO find T_april_cam1, to transform from realsense coordinates to apriltag coordinates
+    # TODO find T_april_world
 
     T_cam1_imu = np.array(calibration['cam0']['T_cam_imu'])
     Transforms.T_cam1_imu = T_cam1_imu
     # Transforms["T_apriltag_world"]
 
-    with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
-    T_apriltag_world = apriltag_world_locations[str(detection.tag_id)] # Get the world frame location of the center of the tag
-    Transforms.T_apriltag_world = T_apriltag_world
+    T_tag_world = np.array(apriltag_world_locations[str(detection.tag_id)]) # Get the world frame location of the center of the tag
+    Transforms.T_apriltag_world = T_tag_world
 
-    T_slam_world = np.linalg.inv( T_cam1_imu @ T_apriltag_cam1) @ T_apriltag_world
+    T_slam_world = np.linalg.inv( T_tag_april @ T_april_cam1 @ T_cam1_imu) @ T_tag_world
     Transforms.T_slam_world = T_slam_world
 
     print(Transforms)

@@ -6,12 +6,7 @@ from scipy.spatial.transform import Rotation as R
 def slam_quat_to_HTM(nparr):
     translation = nparr[1:4]
     quat = nparr[4:8]
-
-    print()
-    print(nparr)
-    print(translation)
-    print(quat)
-
+    
     r = R.from_quat(quat)
     rotation_matrix = r.as_matrix()
 

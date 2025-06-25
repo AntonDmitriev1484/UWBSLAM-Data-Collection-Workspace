@@ -19,6 +19,8 @@ import yaml
 
 import csv
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+
 
 from scipy.spatial.transform import Rotation as R
 
@@ -27,40 +29,72 @@ from dt_apriltags import Detector
 
 import pickle
 
+from types import SimpleNamespace
 
-def debug_transforms(Transforms):
-
-    figs = {}
-
-    for name, T in vars(Transforms).items():
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        ax.set_title(name)
-
-        # Origin
-        origin = T[:3, 3]
-
-        # Axes: unit vectors transformed
-        x_axis = T[:3, :3] @ np.array([1, 0, 0]) + origin
-        y_axis = T[:3, :3] @ np.array([0, 1, 0]) + origin
-        z_axis = T[:3, :3] @ np.array([0, 0, 1]) + origin
-
-        ax.quiver(*origin, *(x_axis - origin), color='r', length=0.1, normalize=True, label='x')
-        ax.quiver(*origin, *(y_axis - origin), color='g', length=0.1, normalize=True, label='y')
-        ax.quiver(*origin, *(z_axis - origin), color='b', length=0.1, normalize=True, label='z')
-
-        ax.set_xlim([origin[0] - 0.1, origin[0] + 0.1])
-        ax.set_ylim([origin[1] - 0.1, origin[1] + 0.1])
-        ax.set_zlim([origin[2] - 0.1, origin[2] + 0.1])
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-        figs[name] = fig
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if hasattr(obj, '__dict__'):
+            return vars(obj)
+        return super().default(obj)
     
-    with open('./debug/transforms.pkl', 'wb') as f:
-        pickle.dump(figs, f)
+
+import os
+import shutil
+
+def clear_directory(dir_path):
+    for filename in os.listdir(dir_path):
+        file_path = os.path.join(dir_path, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)  # Remove file or symbolic link
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)  # Remove directory and its contents
+        except Exception as e:
+            print(f"Failed to delete {file_path}. Reason: {e}")
 
 
+def draw_detection(frame, detection, out_path, CAM1_INTRINSICS):
+        corners = detection.corners
+        pose_R = detection.pose_R
+        pose_t = detection.pose_t
+
+        # Project axes into image
+        axis_length = 0.3  # meters
+        tip_length = 0.15
+
+        # Define axes in 3D
+        origin_3d = pose_t
+        axes_3d = np.array([
+            origin_3d,                             # origin
+            origin_3d + pose_R @ np.array([[axis_length], [0], [0]]),  # X-axis
+            origin_3d + pose_R @ np.array([[0], [axis_length], [0]]),  # Y-axis
+            origin_3d + pose_R @ np.array([[0], [0], [axis_length]])   # Z-axis
+        ])
+
+        # Project to image plane
+        camera_matrix = np.array([
+            [CAM1_INTRINSICS[0], 0, CAM1_INTRINSICS[2]],
+            [0, CAM1_INTRINSICS[1], CAM1_INTRINSICS[3]],
+            [0, 0, 1]
+        ])
+        dist_coeffs = np.zeros(5)  # Assuming undistorted
+
+        imgpts, _ = cv2.projectPoints(axes_3d, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, dist_coeffs)
+        imgpts = imgpts.astype(int).reshape(-1, 2)
+
+        img = cv2.cvtColor(frame["raw"], cv2.COLOR_GRAY2BGR)
+
+        origin = tuple(imgpts[0])
+        cv2.arrowedLine(img, origin, tuple(imgpts[1]), (0, 0, 255), 2, tipLength=tip_length)  # X - red
+        cv2.arrowedLine(img, origin, tuple(imgpts[2]), (0, 255, 0), 2, tipLength=tip_length)  # Y - green
+        cv2.arrowedLine(img, origin, tuple(imgpts[3]), (255, 0, 0), 2, tipLength=tip_length)  # Z - blue
+
+        # Save image
+        out_path = out_path + f"/apriltag_pose_{frame['name']}.png"
+        cv2.imwrite(out_path, img)
+        print(f"Saved AprilTag pose image to {out_path}")
 
 def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
     ### The SLAM frame is defined at the starting pose of the IMU in the world frame.
@@ -101,6 +135,9 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # Find the "closest recognition before the first SLAM cam timestamp"
 
+    detect_dbg_path = "/home/admi3ev/ws/post/debug/detection_frames/"
+    clear_directory(detect_dbg_path)
+
     # TODO: Making sure the initial Pose extraction is temporally close to the first GT coordinate is really important
     # Right now we still have a 0.6s gap between the two
     for frame in infra1_raw_frames:
@@ -112,7 +149,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
         if len(detections) > 0:
             closest_raw_frame = frame
             detection  = detections[0]
-            corners = detections[0].corners
+
+            draw_detection(frame, detection, detect_dbg_path, CAM1_INTRINSICS)
             # plt.scatter(corners[:,0], corners[:,1], c='red', s=3)
             # plt.imshow(frame["raw"])
             # plt.title(f"Frame timestamp: {frame['t']}")
@@ -129,14 +167,18 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # Syntax T_a_b is "pose of a in frame b"
 
-    T_tag_april = np.eye(4)
-    T_tag_april[:3, :3] = detection.pose_R
-    T_tag_april[:3, 3] = detection.pose_t.flatten()
-    Transforms.T_tag_april = T_tag_april
+    rs_frame_dbg = SimpleNamespace()
 
-    T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
-    Transforms.T_april_cam1 = T_april_cam1
 
+    T_tag_cam1 = np.eye(4)
+    T_tag_cam1[:3, :3] = detection.pose_R
+    T_tag_cam1[:3, 3] = detection.pose_t.flatten()
+    Transforms.T_tag_cam1 = T_tag_cam1
+
+    # T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
+    # Transforms.T_april_cam1 = T_april_cam1
+
+    # Throwing out the 'April' frame for now.
     # This detection is the location of the tag in apriltag coordinates
     # TODO find T_april_cam1, to transform from realsense coordinates to apriltag coordinates
     # TODO find T_april_world
@@ -145,15 +187,42 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     Transforms.T_cam1_imu = T_cam1_imu
     # Transforms["T_apriltag_world"]
 
-    T_tag_world = np.array(apriltag_world_locations[str(detection.tag_id)]) # Get the world frame location of the center of the tag
+    DETECTED_ID = str(detection.tag_id)
+    print(f" Detected tag_id {DETECTED_ID}")
+    T_tag_world = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
     Transforms.T_apriltag_world = T_tag_world
 
-    T_slam_world = np.linalg.inv( T_tag_april @ T_april_cam1 @ T_cam1_imu) @ T_tag_world
+    # Verified that inversion is working fine.
+    # print("T_tag_world")
+    # print(T_tag_world)
+
+    # print("T_tag_world inverse")
+    # print(np.linalg.inv(T_tag_world))
+
+    # print("T_tag_world inv inv")
+    # print(np.linalg.inv(np.linalg.inv(T_tag_world)))
+
+
+    # add aPRIL BACK IN
+    T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world
     Transforms.T_slam_world = T_slam_world
+
+    origin = np.eye(4)
+
+    rs_frame_dbg.T_tag_imu = T_tag_cam1 @ T_cam1_imu
+    rs_frame_dbg.T_imu_tag = np.linalg.inv(rs_frame_dbg.T_tag_imu)
+    rs_frame_dbg.T_cam1_imu = T_cam1_imu
+
+    world_frame_dbg = SimpleNamespace()
+    world_frame_dbg.T_tag_world = T_tag_world
+    world_frame_dbg.origin = origin
+    world_frame_dbg.T_slam_world = T_slam_world
 
     print(Transforms)
 
-    debug_transforms(Transforms)
+    with open(f'/home/admi3ev/ws/post/debug/rs_frame_dbg.json', 'w') as fs: json.dump(vars(rs_frame_dbg),fs, cls=NumpyEncoder, indent=1)
+    with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
+    # debug_transforms(Transforms)
 
 
     return Transforms #TODO

@@ -79,14 +79,19 @@ gt_standalone = []
 
 ZERO_TIMESTAMP = slam_data[0][0]
 
+rostypes = load_rostypes()
+print(rostypes)
+
 # Create reader instance and open for reading.
-with AnyReader([bagpath], default_typestore=load_rostypes()) as reader:
+with AnyReader([bagpath], default_typestore=rostypes) as reader:
     connections = [x for x in reader.connections if x.topic in dataset_topics]
     for connection, timestamp, rawdata in reader.messages(connections=connections):
         # if timestamp * 1e-9 >= ZERO_TIMESTAMP: # Cut raw data stream to start when ORBSLAM produces its first estimate
-        msg = reader.deserialize(rawdata, connection.msgtype)
-        proc, arr_ref = topic_to_processing[connection.topic]
-        proc(msg, arr_ref)
+
+        if connection.msgtype != "beluga_messages/msg/BelugaRanges":
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            proc, arr_ref = topic_to_processing[connection.topic]
+            proc(msg, arr_ref)
 
 
 START = reader.start_time * 1e-9

@@ -138,6 +138,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     detect_dbg_path = "/home/admi3ev/ws/post/debug/detection_frames/"
     clear_directory(detect_dbg_path)
 
+    print(f"Read intrinsics {CAM1_INTRINSICS}")
+
     # TODO: Making sure the initial Pose extraction is temporally close to the first GT coordinate is really important
     # Right now we still have a 0.6s gap between the two
     for frame in infra1_raw_frames:
@@ -171,12 +173,15 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
 
     T_tag_cam1 = np.eye(4)
+    print("Detection")
+    print(detection)
+
     T_tag_cam1[:3, :3] = detection.pose_R
     T_tag_cam1[:3, 3] = detection.pose_t.flatten()
     Transforms.T_tag_cam1 = T_tag_cam1
 
-    # T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
-    # Transforms.T_april_cam1 = T_april_cam1
+    T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
+    Transforms.T_april_cam1 = T_april_cam1
 
     # Throwing out the 'April' frame for now.
     # This detection is the location of the tag in apriltag coordinates
@@ -203,12 +208,16 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # print(np.linalg.inv(np.linalg.inv(T_tag_world)))
 
 
-    # add aPRIL BACK IN
-    T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world
+    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu) # Works?
+    # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
+
+    # T_slam_world =  T_tag_cam1 @ T_cam1_imu @ T_tag_world # Works?
+    # T_slam_world = np.linalg.inv(T_cam1_imu) @ np.linalg.inv(T_tag_cam1) @ T_tag_world
     Transforms.T_slam_world = T_slam_world
 
     origin = np.eye(4)
 
+    rs_frame_dbg.T_tag_cam1 = T_tag_cam1
     rs_frame_dbg.T_tag_imu = T_tag_cam1 @ T_cam1_imu
     rs_frame_dbg.T_imu_tag = np.linalg.inv(rs_frame_dbg.T_tag_imu)
     rs_frame_dbg.T_cam1_imu = T_cam1_imu

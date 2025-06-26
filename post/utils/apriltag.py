@@ -176,7 +176,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     print("Detection")
     print(detection)
 
-    T_tag_cam1[:3, :3] = np.linalg.inv(detection.pose_R)
+    T_tag_cam1[:3, :3] = detection.pose_R
     T_tag_cam1[:3, 3] = detection.pose_t.flatten()
     Transforms.T_tag_cam1 = T_tag_cam1
 
@@ -208,7 +208,11 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # print(np.linalg.inv(np.linalg.inv(T_tag_world)))
 
 
-    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 ) 
+    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu) # Works?
+    # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
+
+    # T_slam_world =  T_tag_cam1 @ T_cam1_imu @ T_tag_world # Works?
+    # T_slam_world = np.linalg.inv(T_cam1_imu) @ np.linalg.inv(T_tag_cam1) @ T_tag_world
     Transforms.T_slam_world = T_slam_world
 
     origin = np.eye(4)

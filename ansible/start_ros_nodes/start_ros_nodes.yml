@@ -1,0 +1,45 @@
+---
+- name: Run stereo and UWB scripts in detached mode and fetch logs
+  hosts: DataNUCs  # Replace with your group name
+  gather_facts: false
+  become: false
+
+  vars:
+    remote_log_dir: /tmp/ws_logs
+
+  tasks:
+    - name: Create log directory on remote node
+      file:
+        path: "{{ remote_log_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Run stereo script in background
+      shell: |
+        cd ~/ws/
+        nohup bash collect/start_rs_node_stereo.sh > {{ remote_log_dir }}/rs_node.log 2>&1 &
+      async: 1
+      poll: 0
+
+    - name: Run UWB script in background
+      shell: |
+        cd ~/ws/
+        nohup bash collect/start_uwb_node.sh > {{ remote_log_dir }}/uwb_node.log 2>&1 &
+      async: 1
+      poll: 0
+
+    - name: Wait before fetching logs (give scripts time to start writing)
+      pause:
+        seconds: 5
+
+    - name: Fetch stereo log to controller
+      fetch:
+        src: "{{ remote_log_dir }}/rs_node.log"
+        dest: "./logs/{{ inventory_hostname }}_rs_node.log"
+        flat: true
+
+    - name: Fetch UWB log to controller
+      fetch:
+        src: "{{ remote_log_dir }}/uwb_node.log"
+        dest: "./logs/{{ inventory_hostname }}_uwb_node.log"
+        flat: true

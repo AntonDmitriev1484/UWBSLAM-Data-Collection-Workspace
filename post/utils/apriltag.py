@@ -197,17 +197,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_tag_world = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
     Transforms.T_apriltag_world = T_tag_world
 
-    # Verified that inversion is working fine.
-    # print("T_tag_world")
-    # print(T_tag_world)
-
-    # print("T_tag_world inverse")
-    # print(np.linalg.inv(T_tag_world))
-
-    # print("T_tag_world inv inv")
-    # print(np.linalg.inv(np.linalg.inv(T_tag_world)))
-
-
     T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu) # Works?
     # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
 

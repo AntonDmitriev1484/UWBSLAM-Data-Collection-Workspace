@@ -145,8 +145,13 @@ for i in range(slam_data.shape[0]):
     T_body_slam = slam_quat_to_HTM(slam_data[i,:])
     slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
 
-    T_body_world = Transforms.T_slam_world @ T_body_slam
+    # T_body_world = Transforms.T_slam_world @ T_body_slam
+    T_body_world =  np.linalg.inv(Transforms.T_slam_world @ T_body_slam)
     slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
+
+
+    if args.interpolate_slam_hz is not None:
+        print(f"Interpolating SLAM trajectory to {args.interpolate_slam_hz}")
 
     j = {
         "t": slam_data[i,0],
@@ -161,26 +166,24 @@ with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).write
 
 ### Write SLAM KF trajectory
 
-if args.interpolate_slam_hz is not None:
-    print(f"Interpolating SLAM trajectory to {args.interpolate_slam_hz}")
-else: # Process SLAM poses with no interpolation
-    slam_kf_data_world_frame = []
-    slam_kf_data_slam_frame = []
-    for i in range(slam_kf_data.shape[0]):
+slam_kf_data_world_frame = []
+slam_kf_data_slam_frame = []
+for i in range(slam_kf_data.shape[0]):
 
-        T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
-        slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
+    T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
+    slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
 
-        T_body_world = Transforms.T_slam_world @ T_body_slam
-        slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
+    T_body_world = Transforms.T_slam_world @ T_body_slam
 
-        j = {
-            "t": slam_kf_data[i,0],
-            "type": "slam_kf_pose",
-            "T_body_slam" : T_body_slam,
-            "T_body_world" : T_body_world
-        }
-        all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
+    slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
+
+    j = {
+        "t": slam_kf_data[i,0],
+        "type": "slam_kf_pose",
+        "T_body_slam" : T_body_slam,
+        "T_body_world" : T_body_world
+    }
+    all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
 
 
 with open(f'{out_ml}/slam_kf_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_world_frame))

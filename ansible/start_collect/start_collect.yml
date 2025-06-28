@@ -9,9 +9,8 @@
     countdown: 10
     duration: 15
     log_dir: "./logs"
-    pidfile_path: "/tmp/record_ansible_{{ trial_name }}.pid"
     logfile_path: "/tmp/record_ansible_{{ trial_name }}.log"
-    ansible_source: "/home/admi3ev/ws/collect/ansible_source.sh"
+    ansible_source: "/home/admi3ev/ws/collect/.ansible_source"
 
   pre_tasks:
 
@@ -31,41 +30,31 @@
 
   tasks:
 
-    - name: Start record_ansible in background with nohup and capture errors
+    - name: Start record_ansible with async
       shell: |
         cd ~/ws/collect
-        source .ansible_source
-
-        # Launch with nohup and redirect output
-        nohup ./record_ansible.sh "{{ trial_name }}" > {{ logfile_path }} 2>&1 &
-        echo $! > {{ pidfile_path }}
-
-        # Immediately check if launch failed
-        sleep 0.5
-        if ! ps -p $(cat {{ pidfile_path }}) > /dev/null; then
-          echo "Failed to start record_ansible. See {{ logfile_path }} for details."
-          cat {{ logfile_path }}
-          exit 1
-        fi
+        source {{ ansible_source }}
+        ./record_ansible.sh "{{ trial_name }}" > {{ logfile_path }} 2>&1
       args:
         executable: /bin/bash
-      register: record_start
-      failed_when: record_start.rc != 0
+      async: 300
+      poll: 0
+      register: record_job
 
-    - name: Wait for duration
+    - name: Wait for duration before stopping
       pause:
         seconds: "{{ duration }}"
 
-    - name: Send SIGINT to record_ansible
+    - name: Send SIGINT to record_ansible.sh process
       shell: |
-        kill -2 $(cat {{ pidfile_path }}) && rm -f {{ pidfile_path }}
+        pkill -2 -f "record_ansible.sh {{ trial_name }}"
       args:
         executable: /bin/bash
       ignore_errors: true
 
-    - name: Wait for process to flush and exit
+    - name: Wait for ROS bag process to flush and write metadata
       pause:
-        seconds: 2
+        seconds: 10
 
     - name: Fetch log file from remote node
       fetch:

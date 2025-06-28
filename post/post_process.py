@@ -30,6 +30,7 @@ parser.add_argument("--trial_name" , "-t", type=str)
 parser.add_argument("--calibration_file", "-c", type=str)
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
+parser.add_argument("--interpolate_slam_hz", "-i", type=int)
 
 args = parser.parse_args()
 
@@ -55,14 +56,6 @@ slam_kf_data = np.loadtxt(in_slam_kf)
 slam_kf_data[:,0] *= 1e-9
 slam_data = np.loadtxt(in_slam)
 slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
-
-# TODO: 
-# Mark the timestamp of the first cam pose (0,0,0)
-# Find the closest frame that gets the keyframe recognized to that timestamp
-# Return the apriltag transform from that frame.
-
-
-
 
 # Need to maintain another array that we can buffer data to before dumping one sensor per csv
 topic_to_processing = {
@@ -112,6 +105,8 @@ print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages"
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
+def filtt(arr): return list(filter(lambda x: (START <= x["t"] <= END), arr))
+def filtt2(arr): return list(filter(lambda x: (START <= x[0] <= END), arr))
 
 
 Transforms = SimpleNamespace()
@@ -131,7 +126,7 @@ for j in topic_to_processing['/uwb_ranges'][1]:
     uwb_csv.append(csv_row)
     all_data.append(j)
 
-with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(uwb_csv)
+with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
 ### Write IMU data to its own csv file, and to all_data
 imu_csv = []
@@ -140,7 +135,7 @@ for j in topic_to_processing['/camera/camera/imu'][1]:
     for k, v in j.items(): csv_row.append(v)
     imu_csv.append(csv_row)
     all_data.append(j)
-with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(imu_csv)
+with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
 ### Write SLAM camera trajectory
 slam_data_world_frame = []
@@ -161,30 +156,35 @@ for i in range(slam_data.shape[0]):
     }
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
 
-with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_data_world_frame)
-with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_data_slam_frame)
+with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_world_frame))
+with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))
 
 ### Write SLAM KF trajectory
-slam_kf_data_world_frame = []
-slam_kf_data_slam_frame = []
-for i in range(slam_kf_data.shape[0]):
 
-    T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
-    slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
+if args.interpolate_slam_hz is not None:
+    print(f"Interpolating SLAM trajectory to {args.interpolate_slam_hz}")
+else: # Process SLAM poses with no interpolation
+    slam_kf_data_world_frame = []
+    slam_kf_data_slam_frame = []
+    for i in range(slam_kf_data.shape[0]):
 
-    T_body_world = Transforms.T_slam_world @ T_body_slam
-    slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
+        T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
+        slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
 
-    j = {
-        "t": slam_kf_data[i,0],
-        "type": "slam_kf_pose",
-        "T_body_slam" : T_body_slam,
-        "T_body_world" : T_body_world
-    }
-    all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
+        T_body_world = Transforms.T_slam_world @ T_body_slam
+        slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
 
-with open(f'{out_ml}/slam_kf_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_kf_data_world_frame)
-with open(f'{out_ml}/slam_kf_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(slam_kf_data_slam_frame)
+        j = {
+            "t": slam_kf_data[i,0],
+            "type": "slam_kf_pose",
+            "T_body_slam" : T_body_slam,
+            "T_body_world" : T_body_world
+        }
+        all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
+
+
+with open(f'{out_ml}/slam_kf_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_world_frame))
+with open(f'{out_ml}/slam_kf_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_slam_frame))
 
 
 ### Write Infra1 frames to output directory, and provide references in all_data
@@ -218,7 +218,7 @@ with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), 
 
 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
-all_data = list(filter(lambda x: (START <= x["t"] <= END), all_data))
+all_data = filtt(all_data)
 all_data = sorted(all_data, key=lambda x: x["t"])
 
 json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)

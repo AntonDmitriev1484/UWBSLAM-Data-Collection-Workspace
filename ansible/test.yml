@@ -1,0 +1,10 @@
+---
+- name: Create a hello.txt file on the node
+  hosts: DataNUCs
+  become: false
+  tasks:
+    - name: Create ~/hello.txt with some content
+      copy:
+        dest: "{{ ansible_env.HOME }}/hello.txt"
+        content: "Hello from Ansible!\n"
+

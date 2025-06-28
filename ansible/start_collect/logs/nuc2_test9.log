@@ -1,0 +1,30 @@
+Recording all topics to bag named 'test9' for  seconds.
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1751148258.999028963] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1751148259.000741359] [rosbag2_storage]: Opened database 'test9/test9_0.db3' for READ_WRITE.
+[INFO] [1751148259.003754567] [rosbag2_recorder]: Listening for topics...
+[INFO] [1751148259.003808222] [rosbag2_recorder]: Event publisher thread: Starting
+[INFO] [1751148259.005111926] [rosbag2_recorder]: Subscribed to topic '/rosout'
+[INFO] [1751148259.005929410] [rosbag2_recorder]: Subscribed to topic '/events/write_split'
+[INFO] [1751148259.006053212] [rosbag2_recorder]: Recording...
+[INFO] [1751148259.712443068] [rosbag2_recorder]: Subscribed to topic '/camera/camera/infra1/image_rect_raw'
+[INFO] [1751148259.713391971] [rosbag2_recorder]: Subscribed to topic '/camera/camera/imu'
+[INFO] [1751148259.715549789] [rosbag2_recorder]: Subscribed to topic '/camera/camera/gyro/imu_info'
+[INFO] [1751148259.716410112] [rosbag2_recorder]: Subscribed to topic '/camera/camera/accel/sample'
+[INFO] [1751148259.717221748] [rosbag2_recorder]: Subscribed to topic '/camera/camera/extrinsics/depth_to_infra1'
+[INFO] [1751148259.718001084] [rosbag2_recorder]: Subscribed to topic '/camera/camera/infra2/metadata'
+[INFO] [1751148259.718901379] [rosbag2_recorder]: Subscribed to topic '/camera/camera/infra2/camera_info'
+[INFO] [1751148259.721420031] [rosbag2_recorder]: Subscribed to topic '/camera/camera/infra1/metadata'
+[INFO] [1751148259.722345237] [rosbag2_recorder]: Subscribed to topic '/camera/camera/infra2/image_rect_raw'
+[INFO] [1751148259.723713309] [rosbag2_recorder]: Subscribed to topic '/camera/camera/accel/imu_info'
+[INFO] [1751148259.726674896] [rosbag2_recorder]: Subscribed to topic '/camera/camera/extrinsics/depth_to_infra2'
+[INFO] [1751148259.733822734] [rosbag2_recorder]: Subscribed to topic '/tf_static'
+[INFO] [1751148259.735706654] [rosbag2_recorder]: Subscribed to topic '/camera/camera/accel/metadata'
+[INFO] [1751148259.737456152] [rosbag2_recorder]: Subscribed to topic '/camera/camera/extrinsics/depth_to_gyro'
+[INFO] [1751148259.738112914] [rosbag2_recorder]: Subscribed to topic '/camera/camera/gyro/sample'
+[INFO] [1751148259.738707633] [rosbag2_recorder]: Subscribed to topic '/camera/camera/extrinsics/depth_to_accel'
+[INFO] [1751148259.739429415] [rosbag2_recorder]: Subscribed to topic '/parameter_events'
+[INFO] [1751148259.740783042] [rosbag2_recorder]: Subscribed to topic '/camera/camera/gyro/metadata'
+[INFO] [1751148259.741615522] [rosbag2_recorder]: Subscribed to topic '/camera/camera/infra1/camera_info'
+[INFO] [1751148259.945719954] [rosbag2_recorder]: Subscribed to topic '/uwb_exchanges'
+[INFO] [1751148259.946819267] [rosbag2_recorder]: Subscribed to topic '/neighbor_list'
+[INFO] [1751148259.947652468] [rosbag2_recorder]: Subscribed to topic '/uwb_ranges'

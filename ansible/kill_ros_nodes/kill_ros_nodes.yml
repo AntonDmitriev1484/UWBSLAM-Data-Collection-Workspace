@@ -1,0 +1,27 @@
+---
+- name: Shutdown ROS 2 lifecycle nodes cleanly
+  hosts: DataNUCs  # Replace with your group
+  gather_facts: false
+  become: false
+
+  vars:
+    lifecycle_nodes:
+      - /camera/camera
+      - /beluga
+
+  tasks:
+
+    - name: Send lifecycle shutdown command to ROS 2 nodes
+      shell: |
+        source /opt/ros/humble/setup.bash && \
+        ros2 lifecycle set {{ item }} shutdown
+      loop: "{{ lifecycle_nodes }}"
+      register: shutdown_results
+      ignore_errors: true
+
+    - name: Show shutdown results
+      debug:
+        msg: |
+          Shutdown result for node '{{ item.item }}':
+          {{ item.stdout }}
+      loop: "{{ shutdown_results.results }}"

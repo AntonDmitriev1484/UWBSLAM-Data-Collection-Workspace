@@ -1,0 +1,80 @@
+---
+- name: Run record_ansible with countdown and SIGINT after duration
+  hosts: DataNUCs
+  gather_facts: false
+  become: false
+
+  vars:
+    trial_name: default_trial
+    countdown: 10
+    duration: 15
+    log_dir: "./logs"
+    pidfile_path: "/tmp/record_ansible_{{ trial_name }}.pid"
+    logfile_path: "/tmp/record_ansible_{{ trial_name }}.log"
+    ansible_source: "/home/admi3ev/ws/collect/ansible_source.sh"
+
+  pre_tasks:
+
+    - name: Create logs directory on controller
+      delegate_to: localhost
+      run_once: true
+      file:
+        path: "{{ log_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Wait silently before starting
+      delegate_to: localhost
+      run_once: true
+      pause:
+        seconds: "{{ countdown }}"
+
+  tasks:
+
+    - name: Start record_ansible in background with nohup and capture errors
+      shell: |
+        cd ~/ws/collect
+        source .ansible_source
+
+        # Launch with nohup and redirect output
+        nohup ./record_ansible.sh "{{ trial_name }}" > {{ logfile_path }} 2>&1 &
+        echo $! > {{ pidfile_path }}
+
+        # Immediately check if launch failed
+        sleep 0.5
+        if ! ps -p $(cat {{ pidfile_path }}) > /dev/null; then
+          echo "Failed to start record_ansible. See {{ logfile_path }} for details."
+          cat {{ logfile_path }}
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      register: record_start
+      failed_when: record_start.rc != 0
+
+    - name: Wait for duration
+      pause:
+        seconds: "{{ duration }}"
+
+    - name: Send SIGINT to record_ansible
+      shell: |
+        kill -2 $(cat {{ pidfile_path }}) && rm -f {{ pidfile_path }}
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+
+    - name: Wait for process to flush and exit
+      pause:
+        seconds: 2
+
+    - name: Fetch log file from remote node
+      fetch:
+        src: "{{ logfile_path }}"
+        dest: "{{ log_dir }}/{{ inventory_hostname }}_{{ trial_name }}.log"
+        flat: true
+
+    - name: Clean up remote log file
+      file:
+        path: "{{ logfile_path }}"
+        state: absent
+      ignore_errors: true

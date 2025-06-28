@@ -1,0 +1,34 @@
+[INFO] [launch]: All log files can be found below /home/admi3ev/.ros/log/2025-06-28-15-32-51-788204-admi3ev-MINI-S-20653
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [realsense2_camera_node-1]: process started with pid [20665]
+[realsense2_camera_node-1] [0m[INFO] [1751142772.151727756] [camera.camera]: RealSense ROS v4.55.1[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.151853321] [camera.camera]: Built with LibRealSense v2.55.1[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.151872450] [camera.camera]: Running with LibRealSense v2.55.1[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.182738343] [camera.camera]: Device with serial number 938422076615 was found.
+[realsense2_camera_node-1] [0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.182795892] [camera.camera]: Device with physical ID /sys/devices/pci0000:00/0000:00:0d.0/usb2/2-1/2-1:1.0/video4linux/video0 was found.[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.182813746] [camera.camera]: Device with name Intel RealSense D435I was found.[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.182999286] [camera.camera]: Device with port number 2-1 was found.[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183018176] [camera.camera]: Device USB type: 3.2[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183084129] [camera.camera]: getParameters...[0m
+[realsense2_camera_node-1] [33m[WARN] [1751142772.183470023] [camera.camera]: For the 'unite_imu_method' param update to take effect, re-enable either gyro or accel stream.[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183494911] [camera.camera]: JSON file is not provided[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183509310] [camera.camera]: Device Name: Intel RealSense D435I[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183522634] [camera.camera]: Device Serial No: 938422076615[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183535635] [camera.camera]: Device physical port: /sys/devices/pci0000:00/0000:00:0d.0/usb2/2-1/2-1:1.0/video4linux/video0[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183548757] [camera.camera]: Device FW version: 5.16.0.1[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183561004] [camera.camera]: Device Product ID: 0x0B3A[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.183572548] [camera.camera]: Sync Mode: On[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.282264270] [camera.camera]: Set ROS param depth_module.depth_profile to default: 848x480x30[0m
+[realsense2_camera_node-1] [33m[WARN] [1751142772.283201315] [camera.camera]: re-enable the stream for the change to take effect.[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.291247322] [camera.camera]: Set ROS param rgb_camera.color_profile to default: 1280x720x30[0m
+[realsense2_camera_node-1] [31m[ERROR] [1751142772.292059559] [camera.camera]: Given value, 200 is invalid. Set ROS param back to: 63[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.295427096] [camera.camera]: Stopping Sensor: Depth Module[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.295473183] [camera.camera]: Stopping Sensor: Motion Module[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.311174665] [camera.camera]: Starting Sensor: Depth Module[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.313180672] [camera.camera]: Open profile: stream_type: Infra(1), Format: Y8, Width: 640, Height: 480, FPS: 30[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.313232442] [camera.camera]: Open profile: stream_type: Infra(2), Format: Y8, Width: 640, Height: 480, FPS: 30[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.332691584] [camera.camera]: Starting Sensor: Motion Module[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.335112288] [camera.camera]: Open profile: stream_type: Accel(0)Format: MOTION_XYZ32F, FPS: 63[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.335165712] [camera.camera]: Open profile: stream_type: Gyro(0)Format: MOTION_XYZ32F, FPS: 200[0m
+[realsense2_camera_node-1] [0m[INFO] [1751142772.337813649] [camera.camera]: RealSense Node Is Up![0m

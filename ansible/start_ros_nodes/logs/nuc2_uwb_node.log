@@ -1,0 +1,31 @@
+[INFO] [1751142772.175698554] [beluga]: Trying to connect to SEGGER J-Link: /dev/ttyACM0
+
+[INFO] [1751142772.708233108] [beluga]: Current id setting: ID: 2 OK
+[INFO] [1751142772.711547692] [beluga]: Current bootmode setting: Bootmode: 2 OK
+[INFO] [1751142772.714252904] [beluga]: Current rate setting: Rate: 100 OK
+[INFO] [1751142772.717285124] [beluga]: Current channel setting: Channel: 5 OK
+[INFO] [1751142772.720641721] [beluga]: Current timeout setting: Timeout: 9000 OK
+[INFO] [1751142772.724596812] [beluga]: Current txpower setting: TX Power: 0x0E080222 OK
+[INFO] [1751142772.724617496] [beluga]: Difference in txpower setting. Now setting txpower to 0
+[INFO] [1751142772.730661427] [beluga]: Current streammode setting: Stream Mode: 1 OK
+[INFO] [1751142772.733360067] [beluga]: Current twrmode setting: TWR: 1 OK
+[INFO] [1751142772.736535750] [beluga]: Current ledmode setting: LED Mode: 0 OK
+[INFO] [1751142772.739900016] [beluga]: Current pwramp setting: Invalid AT command
+[INFO] [1751142772.740934990] [beluga]: AT+PWRAMP is disabled int firmware
+[INFO] [1751142772.744599381] [beluga]: Current datarate setting: UWB data rate: 0 OK
+[INFO] [1751142772.748726896] [beluga]: Current preamble setting: Preamble length: 128 OK
+[INFO] [1751142772.752224856] [beluga]: Current pulserate setting: Pulse Rate: 1 OK
+[INFO] [1751142772.755685845] [beluga]: Current antenna setting: Invalid AT command
+[INFO] [1751142772.758817721] [beluga]: Current phr setting: UWB PHR mode: 0 OK
+[INFO] [1751142772.761589937] [beluga]: Current pac setting: PAC Size: 0 OK
+[INFO] [1751142772.764983843] [beluga]: Current sfd setting: Nonstandard SFD: 0 OK
+[INFO] [1751142772.768239473] [beluga]: Current panid setting: PAN ID: 0xDECA OK
+[INFO] [1751142772.768263368] [beluga]: Rebooting beluga
+[INFO] [1751142774.775976419] [beluga]: Reboot response: Response timed out
+[INFO] [1751142774.776028686] [beluga]: Done rebooting
+[INFO] [1751142774.776037522] [beluga]: Syncing time
+[INFO] [1751142774.878953694] [beluga]: Synced time: 2057 -> 1751142774.826103 (1001031.500000)
+[INFO] [1751142775.481918386] [beluga]: Synced time: 2660 -> 1751142775.429152 (1000996.905000)
+[INFO] [1751142776.084918501] [beluga]: Synced time: 3263 -> 1751142776.032139 (1000960.277500)
+[INFO] [1751142776.687915490] [beluga]: Synced time: 3866 -> 1751142776.635117 (1000867.908750)
+[INFO] [1751142777.290872821] [beluga]: Synced time: 4469 -> 1751142777.238086 (1000796.159375)

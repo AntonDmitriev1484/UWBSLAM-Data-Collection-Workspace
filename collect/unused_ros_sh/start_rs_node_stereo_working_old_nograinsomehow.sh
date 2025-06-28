@@ -11,14 +11,13 @@ gyro_fps:=200 \
 enable_accel:=true \
 accel_fps:=200 \
 unite_imu_method:=2 \
-enable_color:=true \
-enable_depth:=true \
+enable_depth:=false \
+enable_color:=false \
 enable_infra1:=true \
 enable_infra2:=true \
-rgb_camera.color_profile:="640,480,30" \
-depth_module.depth_profile:="640,480,30" \
-align_depth.enable:=true \
-depth_module.infra_profile:="640,480,30" \
-depth_module.emitter_enabled:=0
+depth_module.infra_profile:="640,480,30"
+#depth_module.emitter_enabled:=0 \
+#clip_distance:=10.0 \
+align_depth:=true
 
 

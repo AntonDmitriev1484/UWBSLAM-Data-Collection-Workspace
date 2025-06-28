@@ -5,6 +5,8 @@ if [ $# -lt 3 ]; then
   exit 1
 fi
 
+source /opt/ros/humble/setup.bash
+
 cd ros2/
 
 DELAY=$1

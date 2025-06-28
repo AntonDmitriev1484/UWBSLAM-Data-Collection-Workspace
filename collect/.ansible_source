@@ -1,0 +1,4 @@
+# sources /etc/bash.bashrc).
+source /opt/ros/humble/setup.bash
+#source /home/admi3ev/Beluga-2.0/ROS/install/setup.bash
+source /home/admi3ev/Beluga-Firmware-Mod/ROS/install/setup.bash

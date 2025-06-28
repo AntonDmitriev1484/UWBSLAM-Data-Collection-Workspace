@@ -47,7 +47,7 @@ in_slam = f'../orbslam/out/{args.trial_name}_cam_traj.txt'
 in_slam_kf = f'../orbslam/out/{args.trial_name}_kf_traj.txt'
 in_kalibr = f"../kalibr/camimu_out/{args.calibration_file}-camchain-imucam.yaml"
 in_apriltags = f"../world/{args.apriltags_file}"
-in_anchors = f"../world/{args.apriltags_file}"
+in_anchors = f"../world/{args.anchors_file}"
 
 bagpath = Path(f'../collect/ros2/{args.trial_name}')
 
@@ -82,17 +82,32 @@ ZERO_TIMESTAMP = slam_data[0][0]
 rostypes = load_rostypes()
 print(rostypes)
 
+uwb_message_count = 0
+processed_uwb_message = 0
+
 # Create reader instance and open for reading.
 with AnyReader([bagpath], default_typestore=rostypes) as reader:
     connections = [x for x in reader.connections if x.topic in dataset_topics]
     for connection, timestamp, rawdata in reader.messages(connections=connections):
         # if timestamp * 1e-9 >= ZERO_TIMESTAMP: # Cut raw data stream to start when ORBSLAM produces its first estimate
 
-        if connection.msgtype != "beluga_messages/msg/BelugaRanges":
+        # if connection.msgtype != "beluga_messages/msg/BelugaRanges":
+
+        try:
             msg = reader.deserialize(rawdata, connection.msgtype)
             proc, arr_ref = topic_to_processing[connection.topic]
             proc(msg, arr_ref)
+            if connection.msgtype == "beluga_messages/msg/BelugaRanges": 
+                processed_uwb_message +=1
+                uwb_message_count += 1
 
+        except Exception:
+            print( "skipped UWB message")
+            if connection.msgtype == "beluga_messages/msg/BelugaRanges": 
+                uwb_message_count +=1
+            continue  # optionally log here
+
+print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages")
 
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
@@ -162,7 +177,7 @@ for i in range(slam_kf_data.shape[0]):
 
     j = {
         "t": slam_kf_data[i,0],
-        "type": "slam_pose",
+        "type": "slam_kf_pose",
         "T_body_slam" : T_body_slam,
         "T_body_world" : T_body_world
     }

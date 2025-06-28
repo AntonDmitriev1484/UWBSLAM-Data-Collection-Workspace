@@ -140,29 +140,17 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     print(f"Read intrinsics {CAM1_INTRINSICS}")
 
-    # TODO: Making sure the initial Pose extraction is temporally close to the first GT coordinate is really important
-    # Right now we still have a 0.6s gap between the two
+    detections = []
     for frame in infra1_raw_frames:
         detections = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
 
-        # cv2.imshow('Frame',frame["raw"])
-        # cv2.waitKey(int((1/30) * 1000))
-
         if len(detections) > 0:
             closest_raw_frame = frame
-            detection  = detections[0]
-
             draw_detection(frame, detection, detect_dbg_path, CAM1_INTRINSICS)
-            # plt.scatter(corners[:,0], corners[:,1], c='red', s=3)
-            # plt.imshow(frame["raw"])
-            # plt.title(f"Frame timestamp: {frame['t']}")
-            # plt.show()
         
         if frame["t"] > ZERO_TIMESTAMP: break
     
     print(f"SLAM origin t={ZERO_TIMESTAMP}. Closest camera frame t={closest_raw_frame['t']}")
-
-    # Pass a mutable object called transforms through these functions.
 
 
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
@@ -176,9 +164,15 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     print("Detection")
     print(detection)
 
-    T_tag_cam1[:3, :3] = detection.pose_R
-    T_tag_cam1[:3, 3] = detection.pose_t.flatten()
-    Transforms.T_tag_cam1 = T_tag_cam1
+    # So to average out the results of multiple detections,
+    # You need to compute a T_slam_world per transform, and then average those.
+
+    tag_cam1_candidates = []
+    for d in detections:
+        T_tag_cam1[:3, :3] = d.pose_R
+        T_tag_cam1[:3, 3] = d.pose_t.flatten()
+        Transforms.T_tag_cam1 = T_tag_cam1
+    
 
     T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
     Transforms.T_april_cam1 = T_april_cam1

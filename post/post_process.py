@@ -21,8 +21,12 @@ from utils.ros_msg_handlers import *
 from utils.apriltag import *
 from utils.math_utils import *
 
+
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
 # Example usage:
-# python3 post_process.py -t stereoi_sq -c cam_target_daslab -a pilot3/anchors.json -p pilot3/apriltags.json
+# python3 post_process.py -t stereoi_sq -c cam_target_daslab -a pilot3/anchors.json -p pilot3/apriltags.json -i 10
 
 
 parser = argparse.ArgumentParser(description="Stream collector")
@@ -30,7 +34,7 @@ parser.add_argument("--trial_name" , "-t", type=str)
 parser.add_argument("--calibration_file", "-c", type=str)
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
-parser.add_argument("--interpolate_slam_hz", "-i", type=int)
+parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 
 args = parser.parse_args()
 
@@ -82,9 +86,6 @@ processed_uwb_message = 0
 with AnyReader([bagpath], default_typestore=rostypes) as reader:
     connections = [x for x in reader.connections if x.topic in dataset_topics]
     for connection, timestamp, rawdata in reader.messages(connections=connections):
-        # if timestamp * 1e-9 >= ZERO_TIMESTAMP: # Cut raw data stream to start when ORBSLAM produces its first estimate
-
-        # if connection.msgtype != "beluga_messages/msg/BelugaRanges":
 
         try:
             msg = reader.deserialize(rawdata, connection.msgtype)
@@ -102,6 +103,7 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
 
 print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages")
 
+# Filter for messages within bag timestamp range.
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
@@ -140,18 +142,19 @@ with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(
 ### Write SLAM camera trajectory
 slam_data_world_frame = []
 slam_data_slam_frame = []
-for i in range(slam_data.shape[0]):
+slam_pose_counter = 0
+
+all_data_interpolated = [] # Keep interpolated points in a separate file from all.json
+
+n_points = args.interpolate_slam
+if n_points > 0: print(f"Interpolating SLAM trajectory to {n_points=} .")
+for i in range(slam_data.shape[0]-1):
 
     T_body_slam = slam_quat_to_HTM(slam_data[i,:])
     slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
 
-    # T_body_world = Transforms.T_slam_world @ T_body_slam
-    T_body_world =  np.linalg.inv(Transforms.T_slam_world @ T_body_slam)
+    T_body_world = Transforms.T_slam_world @ T_body_slam
     slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
-
-
-    if args.interpolate_slam_hz is not None:
-        print(f"Interpolating SLAM trajectory to {args.interpolate_slam_hz}")
 
     j = {
         "t": slam_data[i,0],
@@ -160,6 +163,39 @@ for i in range(slam_data.shape[0]):
         "T_body_world" : T_body_world
     }
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
+    slam_pose_counter += 1
+
+    if n_points > 0:
+
+        # All in the slam frame first
+        current_timestamp = slam_data[i, 0]
+        current_pose = T_body_slam
+        next_pose = slam_quat_to_HTM(slam_data[i+1,:])
+
+        dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / n_points
+        dt = (slam_data[i+1,0] - slam_data[i, 0]) / n_points
+
+        Rotation = next_pose[:3, :3]
+
+        for p in range(n_points):
+
+            interp_slam_pose = np.eye(4)
+            interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
+            interp_slam_pose[:3, :3] = Rotation
+
+            interp_world_pose = Transforms.T_slam_world @ interp_slam_pose  
+
+            interp_timestamp = current_timestamp + (p * dt)
+
+            j = { # Note: Only going to interpolate into all.json because I just need this in the tracker.
+                "t": interp_timestamp,
+                "type": "slam_pose",
+                "T_body_slam" : interp_slam_pose,
+                "T_body_world" : interp_world_pose
+            }
+            all_data_interpolated.append(j)
+
+
 
 with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_world_frame))
 with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))
@@ -223,5 +259,8 @@ with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
 all_data = filtt(all_data)
 all_data = sorted(all_data, key=lambda x: x["t"])
-
 json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
+
+all_data = filtt(all_data + all_data_interpolated)
+all_data = sorted(all_data, key=lambda x: x["t"])
+json.dump(all_data, open(outpath+f"/all_interp_{n_points}.json", 'w'), cls=NumpyEncoder, indent=1)

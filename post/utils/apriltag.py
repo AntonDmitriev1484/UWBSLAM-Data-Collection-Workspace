@@ -121,20 +121,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     closest_raw_frame = None
     detection = None
 
-    # Ah I see, the first frame we recognized is actually earlier than when
-    # SLAM is able to initialize tracking
-    # SLAM takes ~3seconds before it outputs an estimate trajectory
-    # Should I just crop the entire dataset to only begin once GT starts?
-
-    # If we start the dataset when SLAM starts producing estimates, we risk completely missing the apriltag.
-    # what the hell lol.
-    # Why does SLAM wait 3 seconds to produce trajectory estimates?????
-    # I guess I need to account for this in future dataset runs...
-
-    # infra1_raw_frames_cropped = [ f for f in infra1_raw_frames if f["t"] > f[""]]
-
-    # Find the "closest recognition before the first SLAM cam timestamp"
-
     detect_dbg_path = "/home/admi3ev/ws/post/debug/detection_frames/"
     clear_directory(detect_dbg_path)
 
@@ -142,49 +128,38 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     detections = []
     for frame in infra1_raw_frames:
-        detections = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
+        detections_ = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
 
-        if len(detections) > 0:
+        if len(detections_) > 0:
             closest_raw_frame = frame
-            draw_detection(frame, detection, detect_dbg_path, CAM1_INTRINSICS)
+            detections = detections_
+            # draw_detection(frame, detection, detect_dbg_path, CAM1_INTRINSICS)
         
         if frame["t"] > ZERO_TIMESTAMP: break
     
     print(f"SLAM origin t={ZERO_TIMESTAMP}. Closest camera frame t={closest_raw_frame['t']}")
-
+    print(f"Time offset of {closest_raw_frame['t'] - ZERO_TIMESTAMP} in coordinate frame computation")
 
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
     # Syntax T_a_b is "pose of a in frame b"
 
-    rs_frame_dbg = SimpleNamespace()
-
+    # A MIRACLE IS MAKING THIS WORK
+    # I HAVE NO IDEA WHY
+    # DO NOT TOUCH
+    # REMEMBER: WHATEVER YOU COMPUTE THE T_WORLD_TAG AS, INVERT THE ROTATION MATRIX.
+    # ALWAYS CHECK FRAMES IN DEBUG/PLOT.PY
 
     T_tag_cam1 = np.eye(4)
-    print("Detection")
-    print(detection)
 
-    # So to average out the results of multiple detections,
-    # You need to compute a T_slam_world per transform, and then average those.
+    detection = detections[0]
 
-    tag_cam1_candidates = []
-    for d in detections:
-        T_tag_cam1[:3, :3] = d.pose_R
-        T_tag_cam1[:3, 3] = d.pose_t.flatten()
-        Transforms.T_tag_cam1 = T_tag_cam1
-    
-
-    T_april_cam1 = np.array(apriltag_world_locations["T_april_cam1"])
-    Transforms.T_april_cam1 = T_april_cam1
-
-    # Throwing out the 'April' frame for now.
-    # This detection is the location of the tag in apriltag coordinates
-    # TODO find T_april_cam1, to transform from realsense coordinates to apriltag coordinates
-    # TODO find T_april_world
+    T_tag_cam1[:3, :3] = detection.pose_R
+    T_tag_cam1[:3, 3] = detection.pose_t.flatten()
+    Transforms.T_tag_cam1 = T_tag_cam1
 
     T_cam1_imu = np.array(calibration['cam0']['T_cam_imu'])
     Transforms.T_cam1_imu = T_cam1_imu
-    # Transforms["T_apriltag_world"]
 
     DETECTED_ID = str(detection.tag_id)
     print(f" Detected tag_id {DETECTED_ID}")
@@ -194,12 +169,11 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu) # Works?
     # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
 
-    # T_slam_world =  T_tag_cam1 @ T_cam1_imu @ T_tag_world # Works?
-    # T_slam_world = np.linalg.inv(T_cam1_imu) @ np.linalg.inv(T_tag_cam1) @ T_tag_world
     Transforms.T_slam_world = T_slam_world
 
     origin = np.eye(4)
 
+    rs_frame_dbg = SimpleNamespace()
     rs_frame_dbg.T_tag_cam1 = T_tag_cam1
     rs_frame_dbg.T_tag_imu = T_tag_cam1 @ T_cam1_imu
     rs_frame_dbg.T_imu_tag = np.linalg.inv(rs_frame_dbg.T_tag_imu)
@@ -214,8 +188,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     with open(f'/home/admi3ev/ws/post/debug/rs_frame_dbg.json', 'w') as fs: json.dump(vars(rs_frame_dbg),fs, cls=NumpyEncoder, indent=1)
     with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
-    # debug_transforms(Transforms)
-
 
     return Transforms #TODO
 

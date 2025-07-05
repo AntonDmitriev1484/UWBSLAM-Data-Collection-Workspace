@@ -15,6 +15,7 @@ from scipy.spatial.transform import Rotation as R
 from types import SimpleNamespace
 
 import shutil
+import math
 
 from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
@@ -35,6 +36,8 @@ parser.add_argument("--calibration_file", "-c", type=str)
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
+parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
+parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20
 
 args = parser.parse_args()
 
@@ -43,10 +46,13 @@ outpath = f'./out/{args.trial_name}_post'
 out_infra1 = f'{outpath}/infra1'
 out_infra2 = f'{outpath}/infra2'
 out_ml = f'{outpath}/ml'
+out_synthetic = outpath+"/synthetic"
+
 os.makedirs(outpath, exist_ok=True)
 os.makedirs(out_infra1, exist_ok=True)
 os.makedirs(out_infra2, exist_ok=True)
 os.makedirs(out_ml, exist_ok=True)
+os.makedirs(out_synthetic, exist_ok=True)
 
 in_slam = f'../orbslam/out/{args.trial_name}_cam_traj.txt'
 in_slam_kf = f'../orbslam/out/{args.trial_name}_kf_traj.txt'
@@ -144,10 +150,28 @@ slam_data_world_frame = []
 slam_data_slam_frame = []
 slam_pose_counter = 0
 
-all_data_interpolated = [] # Keep interpolated points in a separate file from all.json
+all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
 
-n_points = args.interpolate_slam
-if n_points > 0: print(f"Interpolating SLAM trajectory to {n_points=} .")
+
+dataset_slam_pose_frequency = 20 # Need something evenly divisible
+if (args.synthetic_slam_frequency > dataset_slam_pose_frequency):
+    print("Error: can't be doin that buddy")
+    exit()
+n_slam_skip = int(dataset_slam_pose_frequency/args.synthetic_slam_frequency)
+
+if args.synthetic_uwb_frequency > dataset_slam_pose_frequency:
+    n_points = int(args.synthetic_uwb_frequency / dataset_slam_pose_frequency) # How much we need to interpolate between existing orbslam points to get this frequency of UWB
+    n_skip = 1
+else:
+    n_points = 1
+    n_skip = int(dataset_slam_pose_frequency / args.synthetic_uwb_frequency)
+    # ex. with 20 hz GT, and we want to simulate 5Hz UWB, we only interpolate synthetic UWB between every 4th pose pair.
+
+print(f"{n_points=} {n_skip=} {n_slam_skip=}")
+
+if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.interpolate_slam=} .")
+
+
 for i in range(slam_data.shape[0]-1):
 
     T_body_slam = slam_quat_to_HTM(slam_data[i,:])
@@ -165,19 +189,21 @@ for i in range(slam_data.shape[0]-1):
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
     slam_pose_counter += 1
 
-    if n_points > 0:
+    if slam_pose_counter % n_slam_skip == 0: all_data_synthetic.append(j)
 
+    if (slam_pose_counter % n_skip == 0) and n_points > 0:
         # All in the slam frame first
         current_timestamp = slam_data[i, 0]
         current_pose = T_body_slam
         next_pose = slam_quat_to_HTM(slam_data[i+1,:])
 
-        dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / n_points
-        dt = (slam_data[i+1,0] - slam_data[i, 0]) / n_points
+        dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / (n_points+1)
+        dt = (slam_data[i+1,0] - slam_data[i, 0]) / (n_points+1)
 
         Rotation = next_pose[:3, :3]
 
-        for p in range(n_points):
+        print(f" Between t: {slam_data[i+1, 0]} and {slam_data[i, 0]}")
+        for p in range(1, n_points+1):
 
             interp_slam_pose = np.eye(4)
             interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
@@ -186,19 +212,28 @@ for i in range(slam_data.shape[0]-1):
             interp_world_pose = Transforms.T_slam_world @ interp_slam_pose  
 
             interp_timestamp = current_timestamp + (p * dt)
+            print(f" Interpolated timestamp is {interp_timestamp}")
 
             j = { # Note: Only going to interpolate into all.json because I just need this in the tracker.
                 "t": interp_timestamp,
-                "type": "slam_pose",
+                "type": "synthetic_uwb",
                 "T_body_slam" : interp_slam_pose,
                 "T_body_world" : interp_world_pose
             }
-            all_data_interpolated.append(j)
+            all_data_synthetic.append(j)
 
 
 
 with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_world_frame))
 with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))
+
+slam_data_world_frame_tum = []
+# timestamps = []
+# for row in slam_data_world_frame:
+#     slam_data_world_frame_tum.append(slam_HTM_to_TUM(row))
+#     timestamps.append(row[0])
+# with open(f'{outpath}/timestamps.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
+with open(f'{outpath}/slam_data_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
 
 ### Write SLAM KF trajectory
 
@@ -250,7 +285,7 @@ class NumpyEncoder(json.JSONEncoder):
 
 
 
-### Write all world information: transforms, anchors, apriltags, to output
+### Copy all world information: transforms, anchors, apriltags, to output
 shutil.copy(in_anchors, f'{outpath}/anchors.json')
 shutil.copy(in_apriltags, f'{outpath}/apriltags.json')
 with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
@@ -261,6 +296,33 @@ all_data = filtt(all_data)
 all_data = sorted(all_data, key=lambda x: x["t"])
 json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
 
-all_data = filtt(all_data + all_data_interpolated)
-all_data = sorted(all_data, key=lambda x: x["t"])
-json.dump(all_data, open(outpath+f"/all_interp_{n_points}.json", 'w'), cls=NumpyEncoder, indent=1)
+# All data syntehtic is real IMU + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
+all_data_synthetic = filtt( [a for a in all_data if a["type"] == "imu"] + all_data_synthetic) 
+all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
+
+json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
+# So all synthetic files will have a unique name
+
+
+print("Checking frequency of synthetic data")
+
+nuwb, ngt = (0,0)
+for mes in all_data_synthetic:
+    if mes["type"] == "synthetic_uwb": nuwb+=1
+    if mes["type"] == "slam_pose": ngt+=1
+
+generated_fuwb = nuwb / (END-START)
+generated_fgt = ngt / (END-START)
+
+print(f" UWB requested f={args.synthetic_uwb_frequency} , generated f={generated_fuwb}")
+print(f" GT requested f={args.synthetic_slam_frequency} , generated f={generated_fgt}")
+
+to_dump = {
+    "meta": {
+        "slam_freq": args.synthetic_slam_frequency,
+        "generated_slam_freq": generated_fgt,
+        "uwb_freq": args.synthetic_uwb_frequency,
+        "generated_uwb_freq": generated_fuwb
+    }
+}
+json.dump(to_dump, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)

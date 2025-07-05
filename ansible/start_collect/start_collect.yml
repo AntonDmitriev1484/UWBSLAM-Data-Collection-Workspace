@@ -34,7 +34,7 @@
       shell: |
         cd ~/ws/collect
         source {{ ansible_source }}
-        ./record_ansible.sh "{{ trial_name }}" > {{ logfile_path }} 2>&1
+        ./record_ansible.sh "{{ trial_name }}"
       args:
         executable: /bin/bash
       async: 300

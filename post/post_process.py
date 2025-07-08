@@ -157,14 +157,18 @@ dataset_slam_pose_frequency = 20 # Need something evenly divisible
 if (args.synthetic_slam_frequency > dataset_slam_pose_frequency):
     print("Error: can't be doin that buddy")
     exit()
-n_slam_skip = int(dataset_slam_pose_frequency/args.synthetic_slam_frequency)
+
+n_slam_skip = 0
+if args.synthetic_slam_frequency > 0: n_slam_skip = int(dataset_slam_pose_frequency/args.synthetic_slam_frequency)
 
 if args.synthetic_uwb_frequency > dataset_slam_pose_frequency:
     n_points = int(args.synthetic_uwb_frequency / dataset_slam_pose_frequency) # How much we need to interpolate between existing orbslam points to get this frequency of UWB
     n_skip = 1
 else:
     n_points = 1
-    n_skip = int(dataset_slam_pose_frequency / args.synthetic_uwb_frequency)
+    n_skip = 0
+    if args.synthetic_uwb_frequency > 0:
+        n_skip = int(dataset_slam_pose_frequency / args.synthetic_uwb_frequency)
     # ex. with 20 hz GT, and we want to simulate 5Hz UWB, we only interpolate synthetic UWB between every 4th pose pair.
 
 print(f"{n_points=} {n_skip=} {n_slam_skip=}")
@@ -189,9 +193,9 @@ for i in range(slam_data.shape[0]-1):
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
     slam_pose_counter += 1
 
-    if slam_pose_counter % n_slam_skip == 0: all_data_synthetic.append(j)
+    if n_slam_skip > 0 and (slam_pose_counter % n_slam_skip == 0): all_data_synthetic.append(j)
 
-    if (slam_pose_counter % n_skip == 0) and n_points > 0:
+    if n_skip > 0 and (slam_pose_counter % n_skip == 0) and n_points > 0:
         # All in the slam frame first
         current_timestamp = slam_data[i, 0]
         current_pose = T_body_slam

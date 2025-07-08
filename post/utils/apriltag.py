@@ -26,6 +26,7 @@ from scipy.spatial.transform import Rotation as R
 
 from utils.load_rostypes import *
 from dt_apriltags import Detector
+from utils.math_utils import * 
 
 import pickle
 
@@ -126,19 +127,49 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     print(f"Read intrinsics {CAM1_INTRINSICS}")
 
-    detections = []
+    # Make a list of all detected apriltags in the motion.
+    all_detections = [] # (detections obj, associated_frame)
+
+    # infra1_raw_frames  = [f for f in infra1_raw_frames if f["t"] > 1750711255.2999153]
+
     for frame in infra1_raw_frames:
         detections_ = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
-
         if len(detections_) > 0:
-            closest_raw_frame = frame
-            detections = detections_
-            # draw_detection(frame, detection, detect_dbg_path, CAM1_INTRINSICS)
-        
-        if frame["t"] > ZERO_TIMESTAMP: break
+            all_detections.append((detections_, frame))
+
+    # Let the best match be defined as the one with the lowest time delay
+    # Really, I think this should first be based on the one with highest detection certainty?
+
+    # First pick 20 candidates with the highest decision margin (higer is better)
+    # x[0][0] because x[0] is an array of multiple detections
+    best_detections =  (list(sorted(all_detections, key=lambda x: x[0][0].decision_margin, reverse=True)))[:20]
+
+    # Test that this works by only making the selection be out of frames after timestamp 40?
+
+    # Then of those, pick the ones with the best delay
+
+    lowest_match_delay = 10000
+    best_match = None # (detections obj, associated frame, associated pose)
+    for (detections, frame) in best_detections:
+
+        frame_t = frame["t"]
+        # print(slam_data[:,0] - frame_t)
+        closest_slam_pose_index = np.argmin(np.abs(slam_data[:,0] - frame_t))
+        slam_pose = slam_data[closest_slam_pose_index, :]
+        # slam_t = slam_data[np.argmin(slam_data[:,0] - frame_t), 0]
+        slam_t = slam_pose[0]
+
+        match_delay = abs(slam_t - frame_t)
+        if (match_delay < lowest_match_delay):
+            lowest_match_delay = match_delay
+            best_match = (detections, frame, slam_pose)
+
+
     
-    print(f"SLAM origin t={ZERO_TIMESTAMP}. Closest camera frame t={closest_raw_frame['t']}")
-    print(f"Time offset of {closest_raw_frame['t'] - ZERO_TIMESTAMP} in coordinate frame computation")
+    print(f"Best match \n {best_match=}")
+    print(f"Time delay of {lowest_match_delay}s")
+
+    draw_detection(best_match[1], best_match[0][0], detect_dbg_path, CAM1_INTRINSICS)
 
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
@@ -152,7 +183,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     T_tag_cam1 = np.eye(4)
 
-    detection = detections[0]
+    detection = best_match[0][0]
+    pose_slam = slam_quat_to_HTM(best_match[2])
 
     T_tag_cam1[:3, :3] = detection.pose_R
     T_tag_cam1[:3, 3] = detection.pose_t.flatten()
@@ -166,7 +198,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_tag_world = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
     Transforms.T_apriltag_world = T_tag_world
 
-    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu) # Works?
+    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu @ pose_slam) # Works?
+    # T_slam_world = np.linalg.inv(T_tag_world) @ T_tag_cam1 @ T_cam1_imu @ pose_slam
     # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
 
     Transforms.T_slam_world = T_slam_world

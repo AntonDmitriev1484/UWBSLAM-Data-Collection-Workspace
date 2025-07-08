@@ -227,6 +227,20 @@ for i in range(slam_data.shape[0]-1):
             all_data_synthetic.append(j)
 
 
+# Compute velocities in the world frame
+# This way you can set a velocity prior at any time
+
+np_slam_data_world_frame = np.array(slam_data_world_frame)
+dt = np.diff(np_slam_data_world_frame[:,0])
+dx = np.diff(np_slam_data_world_frame[:,4]) / dt
+dy = np.diff(np_slam_data_world_frame[:,7]) / dt
+dz = np.diff(np_slam_data_world_frame[:,10]) / dt
+slam_data_velocity_world_frame = np.vstack((np_slam_data_world_frame[:np_slam_data_world_frame.shape[0]-1,0], dx, dy, dz)).T
+# TODO: Verify this is computing the right thing and in the right frame.
+# TODO: Decide on crop or not.
+print(slam_data_velocity_world_frame[:10])
+
+
 
 with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_world_frame))
 with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))

@@ -34,6 +34,7 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 parser = argparse.ArgumentParser(description="Stream collector")
 parser.add_argument("--trial_name" , "-t", type=str)
 parser.add_argument("--calibration_file", "-c", type=str)
+parser.add_argument("--crop_start", type=float) # Pass the ROS timestamp that you want to crop away all data before. Data will still be used to compute transforms.
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
@@ -114,8 +115,14 @@ print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages"
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
-def filtt(arr): return list(filter(lambda x: (START <= x["t"] <= END), arr))
-def filtt2(arr): return list(filter(lambda x: (START <= x[0] <= END), arr))
+print(f"Data start {START} cropped to {args.crop_start}")
+
+def filtt(arr): # For filtering a json output
+    arr = list(filter(lambda x: (args.crop_start <= x["t"]), arr)) # First filter by crop
+    return list(filter(lambda x: (START <= x["t"] <= END), arr)) # Then filter by ros timestamps
+def filtt2(arr): # For filtering a CSV output
+    arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
+    return list(filter(lambda x: (START <= x[0] <= END), arr))
 
 
 Transforms = SimpleNamespace()
@@ -218,7 +225,7 @@ for i in range(slam_data.shape[0]-1):
         interpolated_rotations = slurpy(interp_timestamps)
 
         # Use kinematics to interpolate on R3 positions
-        for p in range(1, n_points+1):
+        for p in range(1, n_points+1): # I think theres also a SCIPY function to do this cleaner, like SLERP but for XYZ.
 
             interp_slam_pose = np.eye(4)
             interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
@@ -228,7 +235,6 @@ for i in range(slam_data.shape[0]-1):
             interp_world_pose = Transforms.T_slam_world @ interp_slam_pose  
 
             interp_timestamp = current_timestamp + (p * dt)
-            print(f" Interpolated timestamp is {interp_timestamp}")
 
             j = { # Note: Only going to interpolate into all.json because I just need this in the tracker.
                 "t": interp_timestamp,
@@ -342,17 +348,10 @@ shutil.copy(in_apriltags, f'{outpath}/apriltags.json')
 with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
 
-# Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
-all_data = filtt(all_data)
-all_data = sorted(all_data, key=lambda x: x["t"])
-json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
-
-# All data syntehtic is real IMU + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
-all_data_synthetic = filtt( [a for a in all_data if a["type"] == "imu"] + all_data_synthetic) 
-all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
-
-json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
-# So all synthetic files will have a unique name
+# Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
+print("Checking frequency of real data")
+print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
+print(f" Measured SLAM frequency {len(slam_data) / (END-START)}")
 
 print("Checking frequency of synthetic data")
 
@@ -366,6 +365,19 @@ generated_fgt = ngt / (END-START)
 
 print(f" UWB requested f={args.synthetic_uwb_frequency} , generated f={generated_fuwb}")
 print(f" GT requested f={args.synthetic_slam_frequency} , generated f={generated_fgt}")
+
+# Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
+all_data = filtt(all_data)
+all_data = sorted(all_data, key=lambda x: x["t"])
+json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
+
+# All data syntehtic is real IMU + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
+all_data_synthetic = filtt( [a for a in all_data if a["type"] == "imu"] + all_data_synthetic) 
+all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
+
+json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
+# So all synthetic files will have a unique name
+
 
 to_dump = {
     "meta": {

@@ -12,6 +12,7 @@ import argparse
 import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 from types import SimpleNamespace
 
 import shutil
@@ -128,11 +129,13 @@ Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_
 
 ### Write UWB data to its own csv file, and to all_data
 uwb_csv = []
+uwb_range_distribution = []
 for j in topic_to_processing['/uwb_ranges'][1]:
     csv_row = []
     for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
     uwb_csv.append(csv_row)
     all_data.append(j)
+    uwb_range_distribution.append(j['range'])
 
 with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
@@ -175,7 +178,6 @@ print(f"{n_points=} {n_skip=} {n_slam_skip=}")
 
 if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.interpolate_slam=} .")
 
-
 for i in range(slam_data.shape[0]-1):
 
     T_body_slam = slam_quat_to_HTM(slam_data[i,:])
@@ -204,14 +206,24 @@ for i in range(slam_data.shape[0]-1):
         dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / (n_points+1)
         dt = (slam_data[i+1,0] - slam_data[i, 0]) / (n_points+1)
 
-        Rotation = next_pose[:3, :3]
+        Rotato = next_pose[:3, :3]
 
         print(f" Between t: {slam_data[i+1, 0]} and {slam_data[i, 0]}")
+
+        # Use Slerp to interpolate on SE(3) rotations
+        interp_interval = [slam_data[i,0], slam_data[i+1, 0]]
+        interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+        slurpy = Slerp(interp_interval, interp_rots)
+        interp_timestamps = np.linspace(slam_data[i,0], slam_data[i+1, 0], n_points)
+        interpolated_rotations = slurpy(interp_timestamps)
+
+        # Use kinematics to interpolate on R3 positions
         for p in range(1, n_points+1):
 
             interp_slam_pose = np.eye(4)
             interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
-            interp_slam_pose[:3, :3] = Rotation
+            # interp_slam_pose[:3, :3] = Rotation
+            interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix()
 
             interp_world_pose = Transforms.T_slam_world @ interp_slam_pose  
 
@@ -236,9 +248,30 @@ dx = np.diff(np_slam_data_world_frame[:,4]) / dt
 dy = np.diff(np_slam_data_world_frame[:,7]) / dt
 dz = np.diff(np_slam_data_world_frame[:,10]) / dt
 slam_data_velocity_world_frame = np.vstack((np_slam_data_world_frame[:np_slam_data_world_frame.shape[0]-1,0], dx, dy, dz)).T
+# By default. I map the velocity between t and t+1 to timestamp t. This should be good enough for prioring.
+
 # TODO: Verify this is computing the right thing and in the right frame.
 # TODO: Decide on crop or not.
-print(slam_data_velocity_world_frame[:10])
+# print(slam_data_velocity_world_frame[:10])
+
+print(f" SLAM world 0: {slam_data_world_frame[0][0]} SLAM velocity world 0: {slam_data_velocity_world_frame[0][0]}")
+
+# For all slam poses
+slam_idx = 0
+for i, mes in enumerate(all_data):
+    if mes["type"] == "slam_pose":
+        mes_ = mes
+        if slam_idx < slam_data_velocity_world_frame.shape[0]:
+            mes_["v_world"] = {
+                "vx": slam_data_velocity_world_frame[ slam_idx, 1],
+                "vy": slam_data_velocity_world_frame[ slam_idx, 2],
+                "vz": slam_data_velocity_world_frame[ slam_idx, 3]
+            }
+        all_data[i] = mes_ # Extend each pose to also include its computed velocity
+        slam_idx +=1
+
+
+
 
 
 
@@ -320,7 +353,6 @@ all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
 
 json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
 # So all synthetic files will have a unique name
-
 
 print("Checking frequency of synthetic data")
 

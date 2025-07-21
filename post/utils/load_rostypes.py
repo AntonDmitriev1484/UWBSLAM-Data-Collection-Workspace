@@ -12,7 +12,8 @@ def load_rostypes():
     # https://ternaris.gitlab.io/rosbags/topics/typesys.html
 
     # Add Beluga custom message types
-    beluga_msg_dir = '/home/admi3ev/Beluga-2.0/ROS/src/beluga_messages/msg'
+    # beluga_msg_dir = '/home/admi3ev/Beluga-2.0/ROS/src/beluga_messages/msg'
+    beluga_msg_dir = '/home/admi3ev/Beluga-Firmware-Mod/ROS/src/beluga_messages/msg'
     for msg_name in os.listdir(beluga_msg_dir):
         filepath = beluga_msg_dir+f"/{msg_name}"
 

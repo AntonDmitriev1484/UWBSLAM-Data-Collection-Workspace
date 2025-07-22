@@ -118,6 +118,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
         decode_sharpening=0.25,
         debug=0
     )
+    #
 
     closest_raw_frame = None
     detection = None

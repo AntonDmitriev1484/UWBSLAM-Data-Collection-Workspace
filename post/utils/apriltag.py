@@ -107,6 +107,15 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
     # Remember CAM0 corresponds to infra1
     CAM1_INTRINSICS = tuple(calibration['cam0']['intrinsics'])
+    CAM1_INTRINSICS_MAT = np.array([
+                                    [CAM1_INTRINSICS[0], 0, CAM1_INTRINSICS[2]],
+                                    [0, CAM1_INTRINSICS[1], CAM1_INTRINSICS[3]],
+                                    [0, 0, 1]
+                                    ], dtype=np.float32)
+    CAM1_DISTORTION = tuple(calibration['cam0']['distortion_coeffs'])
+    CAM1_DISTORTION_VEC = np.array(CAM1_DISTORTION, dtype=np.float32)
+
+
     TAG_SIZE = 0.100 #10cm tags
 
     at_detector = Detector(
@@ -141,9 +150,9 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # Let the best match be defined as the one with the lowest time delay
     # Really, I think this should first be based on the one with highest detection certainty?
 
-    # First pick 20 candidates with the highest decision margin (higer is better)
-    # x[0][0] because x[0] is an array of multiple detections
-    best_detections =  (list(sorted(all_detections, key=lambda x: x[0][0].decision_margin, reverse=True)))[:20]
+    # First pick 20 candidates with the highest total decision margin (higer is better)
+    # Consider decision margin for both detections
+    best_detections =  (list(sorted(all_detections, key=lambda detections_: sum([d.decision_margin for d in detections_[0]]), reverse=True)))[:20]
 
     # Test that this works by only making the selection be out of frames after timestamp 40?
 
@@ -172,51 +181,120 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     draw_detection(best_match[1], best_match[0][0], detect_dbg_path, CAM1_INTRINSICS)
 
+    # Now use PnP solver to compute the transform 'T_slam_world?' using multiple tags.
+    # How to convert cam1 intrinsics vector to matrix?
+
+
+
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
-    # Syntax T_a_b is "pose of a in frame b"
+    half = TAG_SIZE / 2
+    corners_in_tag_frame = np.array([
+                                [-half,  half, 0],
+                                [ half,  half, 0],
+                                [ half, -half, 0],
+                                [-half, -half, 0]
+                            ], dtype=np.float32)
+    
+    # Let object coordinate space be the world frame.
+    # So we must transform all of these corners into the world frame.
 
-    # A MIRACLE IS MAKING THIS WORK
-    # I HAVE NO IDEA WHY
-    # DO NOT TOUCH
-    # REMEMBER: WHATEVER YOU COMPUTE THE T_WORLD_TAG AS, INVERT THE ROTATION MATRIX.
-    # ALWAYS CHECK FRAMES IN DEBUG/PLOT.PY
+    # Let image coordinate space be the frame itself.
+    
+# https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#ga549c2075fac14829ff4a58bc931c033d
+#     objectPoints	Array of object points in the object coordinate space, Nx3 1-channel or 1xN/Nx1 3-channel, where N is the number of points. vector<Point3d> can be also passed here.
+# imagePoints	Array of corresponding image points, Nx2 1-channel or 1xN/Nx1 2-channel, where N is the number of points. vector<Point2d> can be also passed here. 
 
-    T_tag_cam1 = np.eye(4)
+    worldPoints = [] # 3d coordinates of each point in the world frame.
+    imagePoints = [] # 2d coordinates of each point in the image frame
 
-    detection = best_match[0][0]
-    pose_slam = slam_quat_to_HTM(best_match[2])
+    # Need to make sure each point corresponds to the same thing.
+    # Like our estimate will explode if top left world Point is at the same index as bottom Right image Point
 
-    T_tag_cam1[:3, :3] = detection.pose_R
-    T_tag_cam1[:3, 3] = detection.pose_t.flatten()
-    Transforms.T_tag_cam1 = T_tag_cam1
+    for detection in best_match[0]:
+        # print(detection)
 
-    T_cam1_imu = np.array(calibration['cam0']['T_cam_imu'])
-    Transforms.T_cam1_imu = T_cam1_imu
+        # This should be tag -> world frame, but we read world to tag
+        T_tag_to_world = np.linalg.inv(np.array(apriltag_world_locations[str(detection.tag_id)]))
 
-    DETECTED_ID = str(detection.tag_id)
-    print(f" Detected tag_id {DETECTED_ID}")
-    T_tag_world = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
-    Transforms.T_apriltag_world = T_tag_world
+        for corner_tagframe in corners_in_tag_frame:
+            # Map tag point into world frame
+            # hstack concatenates a 1 to the vector so we can HTM multiply
+            worldPoints.append(  T_tag_to_world @ np.hstack([corner_tagframe, 1])  )
 
-    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu @ pose_slam) # Works?
-    # T_slam_world = np.linalg.inv(T_tag_world) @ T_tag_cam1 @ T_cam1_imu @ pose_slam
-    # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
+        for corner_imageframe in detection.corners:
+            imagePoints.append(corner_imageframe)
+    
 
-    Transforms.T_slam_world = T_slam_world
+    worldPoints = np.array(worldPoints, dtype=np.float32)[:, :3].reshape(-1, 3) # Truncate the 1 we added
+    imagePoints = np.array(imagePoints, dtype=np.float32).reshape(-1,1,2)
 
-    origin = np.eye(4)
+    print(worldPoints)
+    print(imagePoints)
+        # Returns transform from object -> camera
 
-    rs_frame_dbg = SimpleNamespace()
-    rs_frame_dbg.T_tag_cam1 = T_tag_cam1
-    rs_frame_dbg.T_tag_imu = T_tag_cam1 @ T_cam1_imu
-    rs_frame_dbg.T_imu_tag = np.linalg.inv(rs_frame_dbg.T_tag_imu)
-    rs_frame_dbg.T_cam1_imu = T_cam1_imu
+    # TODO: Get this working
+    _, r_world_to_cam1, t_world_to_cam1 = cv2.solvePnP(worldPoints, imagePoints, CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC)
 
-    world_frame_dbg = SimpleNamespace()
-    world_frame_dbg.T_tag_world = T_tag_world
-    world_frame_dbg.origin = origin
-    world_frame_dbg.T_slam_world = T_slam_world
+
+    T_world_to_cam1 = np.eye(4)
+    T_world_to_cam1[:3,:3] = r_world_to_cam1
+    T_world_to_cam1[:3,3] = t_world_to_cam1
+
+    Transforms.T_slam_world = T_world_to_cam1
+
+
+    # PnP solver estimates object pose from tag to camera, given a set of image points in camera frame, 
+    # and their known world frame locaitons
+
+    # Specifically T_(point expressed in object frame) -> point in camera frame
+
+
+
+
+    # # Syntax T_a_b is "pose of a in frame b"
+
+    # # A MIRACLE IS MAKING THIS WORK
+    # # I HAVE NO IDEA WHY
+    # # DO NOT TOUCH
+    # # REMEMBER: WHATEVER YOU COMPUTE THE T_WORLD_TAG AS, INVERT THE ROTATION MATRIX.
+    # # ALWAYS CHECK FRAMES IN DEBUG/PLOT.PY
+
+    # T_tag_cam1 = np.eye(4)
+
+    # detection = best_match[0][0]
+    # pose_slam = slam_quat_to_HTM(best_match[2])
+
+    # T_tag_cam1[:3, :3] = detection.pose_R
+    # T_tag_cam1[:3, 3] = detection.pose_t.flatten()
+    # Transforms.T_tag_cam1 = T_tag_cam1
+
+    # T_cam1_imu = np.array(calibration['cam0']['T_cam_imu'])
+    # Transforms.T_cam1_imu = T_cam1_imu
+
+    # DETECTED_ID = str(detection.tag_id)
+    # print(f" Detected tag_id {DETECTED_ID}")
+    # T_tag_world = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
+    # Transforms.T_apriltag_world = T_tag_world
+
+    # T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu @ pose_slam) # Works?
+    # # T_slam_world = np.linalg.inv(T_tag_world) @ T_tag_cam1 @ T_cam1_imu @ pose_slam
+    # # T_slam_world = np.linalg.inv( T_tag_cam1 @ T_cam1_imu) @ T_tag_world # What I think is mathematically correct
+
+    # Transforms.T_slam_world = T_slam_world
+
+    # origin = np.eye(4)
+
+    # rs_frame_dbg = SimpleNamespace()
+    # rs_frame_dbg.T_tag_cam1 = T_tag_cam1
+    # rs_frame_dbg.T_tag_imu = T_tag_cam1 @ T_cam1_imu
+    # rs_frame_dbg.T_imu_tag = np.linalg.inv(rs_frame_dbg.T_tag_imu)
+    # rs_frame_dbg.T_cam1_imu = T_cam1_imu
+
+    # world_frame_dbg = SimpleNamespace()
+    # world_frame_dbg.T_tag_world = T_tag_world
+    # world_frame_dbg.origin = origin
+    # world_frame_dbg.T_slam_world = T_slam_world
 
     print(Transforms)
 

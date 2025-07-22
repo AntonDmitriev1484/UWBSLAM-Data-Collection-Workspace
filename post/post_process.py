@@ -118,12 +118,11 @@ print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
 def filtt(arr): # For filtering a json output
-    arr = list(filter(lambda x: (args.crop_start <= x["t"]), arr)) # First filter by crop
+    if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x["t"]), arr)) # First filter by crop
     return list(filter(lambda x: (START <= x["t"] <= END), arr)) # Then filter by ros timestamps
 def filtt2(arr): # For filtering a CSV output
-    arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
+    if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
     return list(filter(lambda x: (START <= x[0] <= END), arr))
-
 
 Transforms = SimpleNamespace()
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
@@ -214,8 +213,6 @@ for i in range(slam_data.shape[0]-1):
         dt = (slam_data[i+1,0] - slam_data[i, 0]) / (n_points+1)
 
         Rotato = next_pose[:3, :3]
-
-        print(f" Between t: {slam_data[i+1, 0]} and {slam_data[i, 0]}")
 
         # Use Slerp to interpolate on SE(3) rotations
         interp_interval = [slam_data[i,0], slam_data[i+1, 0]]

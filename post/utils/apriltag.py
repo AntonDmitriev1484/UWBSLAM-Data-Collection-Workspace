@@ -18,8 +18,11 @@ import numpy as np
 import yaml
 
 import csv
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+
 
 
 from scipy.spatial.transform import Rotation as R
@@ -215,17 +218,76 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
         # print(detection)
 
         # This should be tag -> world frame, but we read world to tag
-        # T_tag_to_world = np.linalg.inv(np.array(apriltag_world_locations[str(detection.tag_id)]))
-        T_tag_to_world = np.array(apriltag_world_locations[str(detection.tag_id)])
+        T_tag_to_world = np.linalg.inv(np.array(apriltag_world_locations[str(detection.tag_id)]))
+        # T_tag_to_world = np.array(apriltag_world_locations[str(detection.tag_id)])
 
         for corner_tagframe in corners_in_tag_frame:
-            # Map tag point into world frame
-            # hstack concatenates a 1 to the vector so we can HTM multiply
             worldPoints.append(  T_tag_to_world @ np.hstack([corner_tagframe, 1])  )
-
+            # worldPoints.append(  np.hstack([corner_tagframe, 1]) @ T_tag_to_world )
         for corner_imageframe in detection.corners:
             imagePoints.append(corner_imageframe)
     
+
+    #      # --- Plotting
+    # fig, ax = plt.subplots(figsize=(8, 6))
+    # ax.set_title("2D Image Points from AprilTag Detection")
+    # ax.set_xlabel("Pixel X")
+    # ax.set_ylabel("Pixel Y")
+    # ax.invert_yaxis()  # Origin is usually top-left in images
+
+    # for i, (img_pt, world_pt) in enumerate(zip(imagePoints, worldPoints)):
+    #     x, y = img_pt[0]
+    #     ax.plot(x, y, 'ro')  # Red dot
+    #     ax.text(x + 3, y + 3, f'{i}\n({world_pt[0]:.2f}, {world_pt[1]:.2f}, {world_pt[2]:.2f})', fontsize=8)
+
+    #     # Optional: draw bounding box edges (assumes 4 or 8 points in order)
+    #     if len(imagePoints) == 4 or len(imagePoints) == 8:
+    #         pts2d = np.squeeze(imagePoints, axis=1)
+    #         for i in range(4):  # one tag
+    #             ax.plot(
+    #                 [pts2d[i][0], pts2d[(i+1)%4][0]],
+    #                 [pts2d[i][1], pts2d[(i+1)%4][1]],
+    #                 'b-'
+    #             )
+    #         if len(pts2d) == 8:
+    #             for i in range(4, 8):  # second tag or depth layer
+    #                 ax.plot(
+    #                     [pts2d[i][0], pts2d[4 + (i+1)%4][0]],
+    #                     [pts2d[i][1], pts2d[4 + (i+1)%4][1]],
+    #                     'g--'
+    #                 )
+    #             # Connect verticals between two tag layers
+    #             for i in range(4):
+    #                 ax.plot(
+    #                     [pts2d[i][0], pts2d[i + 4][0]],
+    #                     [pts2d[i][1], pts2d[i + 4][1]],
+    #                     'k--'
+    #                 )
+
+    # plt.grid(True)
+    # plt.tight_layout()
+    # plt.show()
+
+    T_tag_cam1 = np.eye(4)
+
+    detection = best_match[0][0]
+    pose_slam = slam_quat_to_HTM(best_match[2])
+
+    T_tag_cam1[:3, :3] = detection.pose_R
+    T_tag_cam1[:3, 3] = detection.pose_t.flatten()
+    Transforms.T_tag_cam1 = T_tag_cam1
+
+    T_cam1_imu = np.array(calibration['cam0']['T_cam_imu'])
+    Transforms.T_cam1_imu = T_cam1_imu
+
+    DETECTED_ID = str(detection.tag_id)
+    print(f" Detected tag_id {DETECTED_ID}")
+    T_tag_world = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
+    Transforms.T_apriltag_world = T_tag_world
+
+    T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu @ pose_slam) # Works?
+
+
 
     worldPoints = np.ascontiguousarray(np.array(worldPoints, dtype=np.float64)[:, :3]) # Truncate the 1 we added
     imagePoints = np.ascontiguousarray(imagePoints, dtype=np.float64).reshape(len(imagePoints), 1, 2)
@@ -234,21 +296,23 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     print(imagePoints)
         # Returns transform from object -> camera
 
-    # TODO: Get this working
-    _, r_world_to_cam1, t_world_to_cam1 = cv2.solvePnP(worldPoints, imagePoints, CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC, flags=cv2.SOLVEPNP_ITERATIVE)
+    # worldPoints should be shape (N, 3)
+    # worldPoints = np.asarray(worldPoints)
+    r_world_to_cam1_init = np.ascontiguousarray((T_tag_world @ np.linalg.inv( T_tag_cam1 ))[:3,:3], dtype=np.float64)
+    t_world_to_cam1_init =  np.ascontiguousarray((T_tag_world @ np.linalg.inv( T_tag_cam1 ))[:3,3].reshape(3,1), dtype=np.float64)
+    # _, r_world_to_cam1, t_world_to_cam1 = cv2.solvePnP(worldPoints, imagePoints, CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC, 
+    #                                                    useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE,
+    #                                                    rvec=r_world_to_cam1_init, tvec=t_world_to_cam1_init)
+    _, r_world_to_cam1, t_world_to_cam1 = cv2.solvePnP(worldPoints, imagePoints, CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC, 
+                                                    flags=cv2.SOLVEPNP_ITERATIVE)
 
 
     T_world_to_cam1 = np.eye(4)
     T_world_to_cam1[:3,:3] = r_world_to_cam1
     T_world_to_cam1[:3,3] = t_world_to_cam1.flatten()
 
-    Transforms.T_slam_world = T_world_to_cam1
-
-
-    # PnP solver estimates object pose from tag to camera, given a set of image points in camera frame, 
-    # and their known world frame locaitons
-
-    # Specifically T_(point expressed in object frame) -> point in camera frame
+    pose_slam = slam_quat_to_HTM(best_match[2])
+    Transforms.T_slam_world = T_world_to_cam1 * np.linalg.inv(pose_slam)
 
 
 

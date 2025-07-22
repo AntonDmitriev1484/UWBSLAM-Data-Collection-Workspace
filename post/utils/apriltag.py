@@ -312,8 +312,9 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_world_to_cam1[:3,3] = t_world_to_cam1.flatten()
 
     pose_slam = slam_quat_to_HTM(best_match[2])
-    Transforms.T_slam_world = T_world_to_cam1 * np.linalg.inv(pose_slam)
-
+    Transforms.T_world_to_cam1 = T_world_to_cam1
+    Transforms.T_slam_world = T_world_to_cam1 * pose_slam
+    Transforms.T_world_to_point = worldPoints[0]
 
 
 

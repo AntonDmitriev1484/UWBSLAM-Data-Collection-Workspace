@@ -126,7 +126,9 @@ def filtt2(arr): # For filtering a CSV output
 
 Transforms = SimpleNamespace()
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
-Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+# Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+
 
 # Processors functions have now buffered their individual topics into arr_ref
 # This is useful for writing the same datastream to multiple files.

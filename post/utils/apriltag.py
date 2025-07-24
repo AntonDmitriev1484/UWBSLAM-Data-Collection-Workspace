@@ -134,33 +134,23 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # Make a list of all detected apriltags in the motion.
     all_detections = [] # (detections obj, associated_frame)
 
-    # infra1_raw_frames  = [f for f in infra1_raw_frames if f["t"] > 1750711255.2999153]
-
     for frame in infra1_raw_frames:
         detections_ = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
         if len(detections_) > 0:
             all_detections.append((detections_, frame))
 
-    # Let the best match be defined as the one with the lowest time delay
-    # Really, I think this should first be based on the one with highest detection certainty?
-
-    # First pick 20 candidates with the highest decision margin (higer is better)
+    # First pick 20 candidates with the highest decision margin (higher is better)
     # x[0][0] because x[0] is an array of multiple detections
     best_detections =  (list(sorted(all_detections, key=lambda x: x[0][0].decision_margin, reverse=True)))[:20]
 
-    # Test that this works by only making the selection be out of frames after timestamp 40?
-
-    # Then of those, pick the ones with the best delay
-
+    # Then of those, pick the detections with the lowest delay
     lowest_match_delay = 10000
     best_match = None # (detections obj, associated frame, associated pose)
     for (detections, frame) in best_detections:
 
         frame_t = frame["t"]
-        # print(slam_data[:,0] - frame_t)
         closest_slam_pose_index = np.argmin(np.abs(slam_data[:,0] - frame_t))
         slam_pose = slam_data[closest_slam_pose_index, :]
-        # slam_t = slam_data[np.argmin(slam_data[:,0] - frame_t), 0]
         slam_t = slam_pose[0]
 
         match_delay = abs(slam_t - frame_t)
@@ -177,35 +167,27 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
-    # Syntax T_a_b is "pose of a in frame b"
-
-    # A MIRACLE IS MAKING THIS WORK
-    # I HAVE NO IDEA WHY
-    # DO NOT TOUCH
-    # REMEMBER: WHATEVER YOU COMPUTE THE T_WORLD_TAG AS, INVERT THE ROTATION MATRIX.
-    # ALWAYS CHECK FRAMES IN DEBUG/PLOT.PY
+    # Note: Python '@' operator associates a chain in reverse of how you would write it out in right multiplication
+    # H_a_to_b is the HTM that maps from frame A to frame B.
 
     H_cam1_to_tag = np.eye(4)
     detection = best_match[0][0] # Pose of tag in camera frame
-    pose_slam = slam_quat_to_HTM(best_match[2])
     H_cam1_to_tag[:3, :3] = detection.pose_R
-    # print(f" Translation {detection.pose_t.flatten()}")
     H_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
 
-    # I'm pretty sure this is the right cam to tag transform. See T_april_origin in debugger.
+    pose_slam = slam_quat_to_HTM(best_match[2])
+    H_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
 
-    H_sbody_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
+
+    # Starting point of the IMU is SLAM origin
+    # So sorigin and imu are interchangeable
+    H_sbody_to_cam1 = np.array(calibration['cam0']['T_cam_imu']) 
 
     DETECTED_ID = str(detection.tag_id)
     print(f" Detected tag_id {DETECTED_ID}")
     H_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
 
-    H_sorigin_to_sbody = pose_slam
-
-    # T_slam_world = T_tag_world @ np.linalg.inv( T_tag_cam1 @ T_cam1_imu @ pose_slam) # Works?
-    # T_slam_world = np.linalg.inv(T_tag_world) @ T_tag_cam1 @ T_cam1_imu @ pose_slam
-    # T_slam_world = np.linalg.inv( T_tag_cam1 @ H_imu_to_cam1) @ H_world_to_tag # What I think is mathematically correct
-
+    # How you would write it by hand (doesn't work)
     # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
     H_world_to_sorigin = (
         H_world_to_tag
@@ -215,10 +197,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     )
 
 
-    Transforms.T_slam_world = H_world_to_sorigin
-
-
-    rs_frame_dbg = SimpleNamespace()
+    Transforms.T_slam_world = H_world_to_sorigin 
+    # Transforms uses older notation T_slam_world, transform from world to slam origin, i.e. poes of slam origin in world frame
 
     world_frame_dbg = SimpleNamespace()
     world_frame_dbg.H_world_to_sorigin = H_world_to_sorigin
@@ -228,13 +208,12 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     print(Transforms)
 
-    with open(f'/home/admi3ev/ws/post/debug/rs_frame_dbg.json', 'w') as fs: json.dump(vars(rs_frame_dbg),fs, cls=NumpyEncoder, indent=1)
     with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
     return Transforms #TODO
 
 
-def extract_apriltag_pose_bad(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
+def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
     ### The SLAM frame is defined at the starting pose of the IMU in the world frame.
     ### My body frame, is defined as a rotation out of the IMU frame.
 

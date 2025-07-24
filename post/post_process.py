@@ -40,6 +40,10 @@ parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
 parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20
+parser.add_argument("--real_uwb_orientation_support", default=True, type=bool) 
+# With real UWB ranges, but no compass, attach a pose to each uwb measurement using interpolation.
+# Setting this flag interpolates N=100 poses between each SLAM pose, and maps them onto the temporally closest UWB range.
+
 
 args = parser.parse_args()
 
@@ -126,8 +130,8 @@ def filtt2(arr): # For filtering a CSV output
 
 Transforms = SimpleNamespace()
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
-# Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
-Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+# Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 
 
 # Processors functions have now buffered their individual topics into arr_ref
@@ -137,12 +141,13 @@ Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms,
 
 ### Write UWB data to its own csv file, and to all_data
 uwb_csv = []
+
 uwb_range_distribution = []
 for j in topic_to_processing['/uwb_ranges'][1]:
     csv_row = []
     for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
     uwb_csv.append(csv_row)
-    all_data.append(j)
+    if not args.real_uwb_orientation_support:     all_data.append(j) # otherwise postpone this to later
     uwb_range_distribution.append(j['range'])
 
 with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
@@ -169,9 +174,10 @@ if (args.synthetic_slam_frequency > dataset_slam_pose_frequency):
     print("Error: can't be doin that buddy")
     exit()
 
+### Synthetic data generation happens alongside all of the regular world frame transforms
+# Should really separate this code out...
 n_slam_skip = 0
 if args.synthetic_slam_frequency > 0: n_slam_skip = int(dataset_slam_pose_frequency/args.synthetic_slam_frequency)
-
 if args.synthetic_uwb_frequency > dataset_slam_pose_frequency:
     n_points = int(args.synthetic_uwb_frequency / dataset_slam_pose_frequency) # How much we need to interpolate between existing orbslam points to get this frequency of UWB
     n_skip = 1
@@ -191,6 +197,7 @@ for i in range(slam_data.shape[0]-1):
     T_body_slam = slam_quat_to_HTM(slam_data[i,:])
     slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
 
+    # TODO: Caution, T_SLAM_WORLD is the transform from SLAM to world frame, T body_slam is in SLAM frame, why does this work?
     T_body_world = Transforms.T_slam_world @ T_body_slam
     slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
 
@@ -243,6 +250,50 @@ for i in range(slam_data.shape[0]-1):
             }
             all_data_synthetic.append(j)
 
+# If we're using real UWB ranges, but have no compass
+# We interpolate on SLAM poses to match a synthetic orientation to that UWB range
+if (args.real_uwb_orientation_support):
+
+    N_POINTS = 100
+    all_uwb_mes = topic_to_processing['/uwb_ranges'][1]
+    swf = np.array(slam_data_world_frame)
+    for u in all_uwb_mes:
+
+        tdiffs = np.abs(swf[:,0] - u["t"])
+        slam_idx1 = np.argmin(tdiffs)
+        tdiffs[slam_idx1] = np.inf
+        slam_idx2 = np.argmin(tdiffs)
+
+        istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
+        print(f" istart {istart} iend {iend}") # Should be 1 apart from each other
+
+        current_pose, next_pose = slam_quat_to_HTM(slam_data[istart, :]), slam_quat_to_HTM(slam_data[iend, :])
+        
+        # Now interpolate between these two poses
+        interp_interval = [slam_data[istart,0], slam_data[iend, 0]]
+        interp_timestamps = np.linspace(slam_data[istart,0], slam_data[iend, 0], N_POINTS)
+
+        # Use Slerp to interpolate on SO(3) rotations
+        interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+        slurpy = Slerp(interp_interval, interp_rots)
+        interpolated_rotations = slurpy(interp_timestamps)
+
+        # Use linspace to interpolate on R3 positions
+        interpolated_positions = np.linspace(current_pose[:, 3], next_pose[:, 3], N_POINTS)
+
+        # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
+        idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
+        print(f" timestamp diff {abs(interp_timestamps[idx_match] - u['t'])}")
+
+        world_frame_pose = np.eye(4)
+        world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
+        world_frame_pose[:, 3] = interpolated_positions[idx_match]
+
+        u["T_body_world"] = world_frame_pose
+        # u["T_body_slam"] = Transforms.T_slam_world @ world_frame_pose # Can just convert this back to SLAM frame, but I doubt I will use this.
+        # TODO: Caution is T_slam_world the inverse of what it's supposed to be?
+        
+        all_data.append(u)
 
 # Compute velocities in the world frame
 # This way you can set a velocity prior at any time
@@ -254,10 +305,7 @@ dy = np.diff(np_slam_data_world_frame[:,7]) / dt
 dz = np.diff(np_slam_data_world_frame[:,10]) / dt
 slam_data_velocity_world_frame = np.vstack((np_slam_data_world_frame[:np_slam_data_world_frame.shape[0]-1,0], dx, dy, dz)).T
 # By default. I map the velocity between t and t+1 to timestamp t. This should be good enough for prioring.
-
-# TODO: Verify this is computing the right thing and in the right frame.
-# TODO: Decide on crop or not.
-# print(slam_data_velocity_world_frame[:10])
+# These are of dubious quality.... lol
 
 print(f" SLAM world 0: {slam_data_world_frame[0][0]} SLAM velocity world 0: {slam_data_velocity_world_frame[0][0]}")
 
@@ -284,11 +332,6 @@ with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writ
 with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))
 
 slam_data_world_frame_tum = []
-# timestamps = []
-# for row in slam_data_world_frame:
-#     slam_data_world_frame_tum.append(slam_HTM_to_TUM(row))
-#     timestamps.append(row[0])
-# with open(f'{outpath}/timestamps.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
 with open(f'{outpath}/slam_data_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
 
 ### Write SLAM KF trajectory

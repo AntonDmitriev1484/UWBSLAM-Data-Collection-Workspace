@@ -131,7 +131,7 @@ for anchor, uwb_range_distribution in ranges_log.items():
     xmin, xmax = plt.xlim()
     x = np.linspace(xmin, xmax, 500)
     p = norm.pdf(x, mu, std)
-    plt.plot(x, p, 'r--', linewidth=2, label=f"Fitted Gaussian\n$\sigma$ = {std:.3f}")
+    plt.plot(x, p, 'r--', linewidth=2, label=f"Fitted Gaussian\n$\sigma$ = {std:.3f}\n$\mu$ = {mu:.3f}")
 
     # Labels and saving
     plt.title(f"UWB Range Distribution for Anchor {anchor}")

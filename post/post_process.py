@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import shutil
 import math
+import copy
 
 from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
@@ -35,11 +36,12 @@ parser = argparse.ArgumentParser(description="Stream collector")
 parser.add_argument("--trial_name" , "-t", type=str)
 parser.add_argument("--calibration_file", "-c", type=str)
 parser.add_argument("--crop_start", type=float) # Pass the ROS timestamp that you want to crop away all data before. Data will still be used to compute transforms.
+parser.add_argument("--alias", type=str) # Alias for a dataset, ex. if you want to keep a cropped and uncropped version of a dataset
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
-parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20
+parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
 parser.add_argument("--real_uwb_orientation_support", default=True, type=bool) 
 # With real UWB ranges, but no compass, attach a pose to each uwb measurement using interpolation.
 # Setting this flag interpolates N=100 poses between each SLAM pose, and maps them onto the temporally closest UWB range.
@@ -47,8 +49,8 @@ parser.add_argument("--real_uwb_orientation_support", default=True, type=bool)
 
 args = parser.parse_args()
 
-
 outpath = f'./out/{args.trial_name}_post'
+if args.alias is not None: f'./out/{args.alias}_post'
 out_infra1 = f'{outpath}/infra1'
 out_infra2 = f'{outpath}/infra2'
 out_ml = f'{outpath}/ml'
@@ -93,7 +95,6 @@ print(rostypes)
 
 uwb_message_count = 0
 processed_uwb_message = 0
-
 # Create reader instance and open for reading.
 with AnyReader([bagpath], default_typestore=rostypes) as reader:
     connections = [x for x in reader.connections if x.topic in dataset_topics]
@@ -112,8 +113,6 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
             if connection.msgtype == "beluga_messages/msg/BelugaRanges": 
                 uwb_message_count +=1
             continue  # optionally log here
-
-print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages")
 
 # Filter for messages within bag timestamp range.
 START = reader.start_time * 1e-9
@@ -141,14 +140,15 @@ Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_
 
 ### Write UWB data to its own csv file, and to all_data
 uwb_csv = []
-
 uwb_range_distribution = []
 for j in topic_to_processing['/uwb_ranges'][1]:
     csv_row = []
     for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
     uwb_csv.append(csv_row)
-    if not args.real_uwb_orientation_support:     all_data.append(j) # otherwise postpone this to later
+    all_data.append(j)
     uwb_range_distribution.append(j['range'])
+
+# print(all_data[:200]) # So at this point there are uwb messages in all_data 'uwb'
 
 with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
@@ -265,7 +265,6 @@ if (args.real_uwb_orientation_support):
         slam_idx2 = np.argmin(tdiffs)
 
         istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
-        print(f" istart {istart} iend {iend}") # Should be 1 apart from each other
 
         current_pose, next_pose = slam_quat_to_HTM(slam_data[istart, :]), slam_quat_to_HTM(slam_data[iend, :])
         
@@ -289,11 +288,13 @@ if (args.real_uwb_orientation_support):
         world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
         world_frame_pose[:, 3] = interpolated_positions[idx_match]
 
-        u["T_body_world"] = world_frame_pose
+        u2 = copy.deepcopy(u)
+        u2["type"] = "assisted_uwb"
+        u2["T_body_world"] = world_frame_pose
         # u["T_body_slam"] = Transforms.T_slam_world @ world_frame_pose # Can just convert this back to SLAM frame, but I doubt I will use this.
         # TODO: Caution is T_slam_world the inverse of what it's supposed to be?
-        
-        all_data.append(u)
+
+        all_data.append(u2)
 
 # Compute velocities in the world frame
 # This way you can set a velocity prior at any time
@@ -405,6 +406,10 @@ for mes in all_data_synthetic:
 generated_fuwb = nuwb / (END-START)
 generated_fgt = ngt / (END-START)
 
+if args.crop_start is not None: # These numbers might be a bit off with crop start
+    generated_fuwb = nuwb / (END-args.crop_start)
+    generated_fgt = ngt / (END-args.crop_start)
+
 print(f" UWB requested f={args.synthetic_uwb_frequency} , generated f={generated_fuwb}")
 print(f" GT requested f={args.synthetic_slam_frequency} , generated f={generated_fgt}")
 
@@ -413,8 +418,8 @@ all_data = filtt(all_data)
 all_data = sorted(all_data, key=lambda x: x["t"])
 json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
 
-# All data syntehtic is real IMU + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
-all_data_synthetic = filtt( [a for a in all_data if a["type"] == "imu"] + all_data_synthetic) 
+# All data syntehtic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
+all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
 all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
 
 json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)

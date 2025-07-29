@@ -198,6 +198,7 @@ for i in range(slam_data.shape[0]-1):
     slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
 
     # TODO: Caution, T_SLAM_WORLD is the transform from SLAM to world frame, T body_slam is in SLAM frame, why does this work?
+    # This works because the multiplication order is implicitly backwards by default, so this is really multiplying: T_body_slam x T_slam_world -> t_body_world
     T_body_world = Transforms.T_slam_world @ T_body_slam
     slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
 
@@ -266,7 +267,8 @@ if (args.real_uwb_orientation_support):
 
         istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
 
-        current_pose, next_pose = slam_quat_to_HTM(slam_data[istart, :]), slam_quat_to_HTM(slam_data[iend, :])
+        # Make sure poses we're interpolating between are in the world frame.
+        current_pose, next_pose = Transforms.T_slam_world @ slam_quat_to_HTM(slam_data[istart, :]), Transforms.T_slam_world @ slam_quat_to_HTM(slam_data[iend, :])
         
         # Now interpolate between these two poses
         interp_interval = [slam_data[istart,0], slam_data[iend, 0]]
@@ -278,15 +280,14 @@ if (args.real_uwb_orientation_support):
         interpolated_rotations = slurpy(interp_timestamps)
 
         # Use linspace to interpolate on R3 positions
-        interpolated_positions = np.linspace(current_pose[:, 3], next_pose[:, 3], N_POINTS)
+        interpolated_positions = np.linspace(current_pose[:3, 3], next_pose[:3, 3], N_POINTS)
 
         # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
         idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
-        print(f" timestamp diff {abs(interp_timestamps[idx_match] - u['t'])}")
 
         world_frame_pose = np.eye(4)
         world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
-        world_frame_pose[:, 3] = interpolated_positions[idx_match]
+        world_frame_pose[:3, 3] = interpolated_positions[idx_match]
 
         u2 = copy.deepcopy(u)
         u2["type"] = "assisted_uwb"

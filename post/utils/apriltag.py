@@ -171,24 +171,36 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # H_a_to_b is the HTM that maps from frame A to frame B.
 
     H_cam1_to_tag = np.eye(4)
-    detection = best_match[0][0] # Pose of tag in camera frame
-    H_cam1_to_tag[:3, :3] = detection.pose_R
+    # The detection we use should always be the one with the highest decision margin
+    # detection = sorted(best_match[0], key=lambda x: x.decision_margin, reverse= True)[0]
+    detection = best_match[0][1]
+    print(f"Using detection {detection=}")
+
+    H_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
     H_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
 
     pose_slam = slam_quat_to_HTM(best_match[2])
     H_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
+    # Slam body is the left camera frame. So sbody and cam1 are equivalent.
+    # The starting point of cam1 in space is the slam origin.
 
-
-    # Starting point of the IMU is SLAM origin
-    # So sbody(t) and imu(t) are interchangeable -> but only if at the same time!
-    H_sbody_to_cam1 = np.array(calibration['cam0']['T_cam_imu']) 
+    # So sbody(t) and cam1(t) are interchangeable -> but only if at the same time!
+    H_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu']) 
 
     DETECTED_ID = str(detection.tag_id)
-    print(f" Detected tag_id {DETECTED_ID}")
     H_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
 
-    # How you would write it by hand (doesn't work)
-    # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
+    # # How you would write it by hand (doesn't work)
+    # # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
+    # H_world_to_sorigin = (
+    #     H_world_to_tag
+    #     @ np.linalg.inv(H_cam1_to_tag)
+    #     @ np.linalg.inv(H_sbody_to_cam1)
+    #     @ np.linalg.inv(H_sorigin_to_sbody)
+    # )
+
+        # How you would write it by hand (doesn't work)
+    # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
     H_world_to_sorigin = (
         H_world_to_tag
         @ np.linalg.inv(H_cam1_to_tag)

@@ -204,7 +204,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     H_world_to_sorigin = (
         H_world_to_tag
         @ np.linalg.inv(H_cam1_to_tag)
-        @ np.linalg.inv(H_sbody_to_cam1)
         @ np.linalg.inv(H_sorigin_to_sbody)
     )
 
@@ -328,15 +327,18 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
 
         # This should be tag -> world frame, but we read world to tag
         H_world_to_tag = np.array(apriltag_world_locations[str(detection.tag_id)])
-        H_tag_to_world = np.linalg.inv(H_world_to_tag)
+        # H_tag_to_world = np.linalg.inv(H_world_to_tag) 
+        # # You'd think you'd have to invert it? But I guess that's not the case...
+        # This gives the right matrix multiplication results in REPL?
+        # maybe just ask Jose
 
         print(str(detection.tag_id))
         print(H_world_to_tag)
 
         for corner_tagframe, corner_imageframe in zip(corners_in_tag_frame, detection.corners):
             
-            corner_worldframe = H_tag_to_world[:3, :3] * corner_tagframe 
-            worldPoints.append(  (H_tag_to_world @ np.hstack([corner_tagframe, 1]))[:3]  ) # Append and then truncate a 1 from the vector
+            corner_worldframe = H_world_to_tag[:3, :3] * corner_tagframe 
+            worldPoints.append(  (H_world_to_tag @ np.hstack([corner_tagframe, 1]))[:3]  ) # Append and then truncate a 1 from the vector
             imagePoints.append(corner_imageframe)
 
     

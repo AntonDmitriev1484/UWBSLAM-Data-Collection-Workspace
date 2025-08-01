@@ -175,8 +175,8 @@ for j in topic_to_processing['/camera/camera/imu'][1]:
 with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
 ### Write SLAM camera trajectory
-slam_data_world_frame = []
-slam_data_slam_frame = []
+body_poses_world_frame = [] # More accurately, this is a list of T_world_to_body
+slam_poses_slam_frame = [] # This is a list of T_sorigin_to_sbody
 slam_pose_counter = 0
 
 all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
@@ -207,19 +207,25 @@ if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.int
 
 for i in range(slam_data.shape[0]-1):
 
-    T_body_slam = slam_quat_to_HTM(slam_data[i,:])
-    slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
+    T_sorigin_to_sbody = slam_quat_to_HTM(slam_data[i,:])
+    slam_poses_slam_frame.append( [slam_data[i,0]] + list(T_sorigin_to_sbody.flatten()) )
 
-    # TODO: Caution, T_SLAM_WORLD is the transform from SLAM to world frame, T body_slam is in SLAM frame, why does this work?
-    # This works because the multiplication order is implicitly backwards by default, so this is really multiplying: T_body_slam x T_slam_world -> t_body_world
-    T_body_world = Transforms.T_slam_world @ T_body_slam
-    slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
+    # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
+    T_world_to_body = (
+                        Transforms.T_world_to_sorigin 
+                       @ T_sorigin_to_sbody 
+                       @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                       @ np.linalg.inv(Transforms.T_body_to_imu)
+    )
 
+    body_poses_world_frame.append( [slam_data[i,0]] + list(T_world_to_body.flatten()) )
+
+    # NOTE: Not changing these field names because I don't want to blow up my debugging code
     j = {
         "t": slam_data[i,0],
         "type": "slam_pose",
-        "T_body_slam" : T_body_slam,
-        "T_body_world" : T_body_world
+        "T_body_slam" : T_sorigin_to_sbody,
+        "T_body_world" : T_world_to_body
     }
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
     slam_pose_counter += 1
@@ -229,7 +235,7 @@ for i in range(slam_data.shape[0]-1):
     if n_skip > 0 and (slam_pose_counter % n_skip == 0) and n_points > 0:
         # All in the slam frame first
         current_timestamp = slam_data[i, 0]
-        current_pose = T_body_slam
+        current_pose = T_sorigin_to_sbody
         next_pose = slam_quat_to_HTM(slam_data[i+1,:])
 
         dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / (n_points+1)
@@ -250,9 +256,14 @@ for i in range(slam_data.shape[0]-1):
             interp_slam_pose = np.eye(4)
             interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
             # interp_slam_pose[:3, :3] = Rotation
-            interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix()
+            interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix() # T_sorigin_to_sbody
 
-            interp_world_pose = Transforms.T_slam_world @ interp_slam_pose  
+            interp_world_pose = (
+                        Transforms.T_world_to_sorigin 
+                       @ interp_slam_pose 
+                       @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                       @ np.linalg.inv(Transforms.T_body_to_imu)
+            )
 
             interp_timestamp = current_timestamp + (p * dt)
 
@@ -270,7 +281,7 @@ if (args.real_uwb_orientation_support):
 
     N_POINTS = 100
     all_uwb_mes = topic_to_processing['/uwb_ranges'][1]
-    swf = np.array(slam_data_world_frame)
+    swf = np.array(body_poses_world_frame)
     for u in all_uwb_mes:
 
         tdiffs = np.abs(swf[:,0] - u["t"])
@@ -280,9 +291,20 @@ if (args.real_uwb_orientation_support):
 
         istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
 
-        # Make sure poses we're interpolating between are in the world frame.
-        current_pose, next_pose = Transforms.T_slam_world @ slam_quat_to_HTM(slam_data[istart, :]), Transforms.T_slam_world @ slam_quat_to_HTM(slam_data[iend, :])
-        
+        # Make sure poses we're interpolating between are for the body in the world frame
+        current_pose = (
+                    Transforms.T_world_to_sorigin 
+                    @ slam_quat_to_HTM(slam_data[istart, :])
+                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                    @ np.linalg.inv(Transforms.T_body_to_imu)
+        )
+        next_pose = (
+                    Transforms.T_world_to_sorigin 
+                    @ slam_quat_to_HTM(slam_data[iend, :])
+                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                    @ np.linalg.inv(Transforms.T_body_to_imu)            
+        )
+
         # Now interpolate between these two poses
         interp_interval = [slam_data[istart,0], slam_data[iend, 0]]
         interp_timestamps = np.linspace(slam_data[istart,0], slam_data[iend, 0], N_POINTS)
@@ -305,24 +327,21 @@ if (args.real_uwb_orientation_support):
         u2 = copy.deepcopy(u)
         u2["type"] = "assisted_uwb"
         u2["T_body_world"] = world_frame_pose
-        # u["T_body_slam"] = Transforms.T_slam_world @ world_frame_pose # Can just convert this back to SLAM frame, but I doubt I will use this.
-        # TODO: Caution is T_slam_world the inverse of what it's supposed to be?
-
         all_data.append(u2)
 
-# Compute velocities in the world frame
+# Compute velocities from body poses in the world frame
 # This way you can set a velocity prior at any time
 
-np_slam_data_world_frame = np.array(slam_data_world_frame)
-dt = np.diff(np_slam_data_world_frame[:,0])
-dx = np.diff(np_slam_data_world_frame[:,4]) / dt
-dy = np.diff(np_slam_data_world_frame[:,7]) / dt
-dz = np.diff(np_slam_data_world_frame[:,10]) / dt
-slam_data_velocity_world_frame = np.vstack((np_slam_data_world_frame[:np_slam_data_world_frame.shape[0]-1,0], dx, dy, dz)).T
+np_body_poses_world_frame = np.array(body_poses_world_frame)
+dt = np.diff(np_body_poses_world_frame[:,0])
+dx = np.diff(np_body_poses_world_frame[:,4]) / dt
+dy = np.diff(np_body_poses_world_frame[:,7]) / dt
+dz = np.diff(np_body_poses_world_frame[:,10]) / dt
+slam_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
 # By default. I map the velocity between t and t+1 to timestamp t. This should be good enough for prioring.
 # These are of dubious quality.... lol
 
-print(f" SLAM world 0: {slam_data_world_frame[0][0]} SLAM velocity world 0: {slam_data_velocity_world_frame[0][0]}")
+print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {slam_data_velocity_world_frame[0][0]}")
 
 # For all slam poses
 slam_idx = 0
@@ -343,24 +362,24 @@ for i, mes in enumerate(all_data):
 
 
 
-with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_world_frame))
-with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))
+with open(f'{out_ml}/body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(body_poses_world_frame))
+with open(f'{out_ml}/slam_poses_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_poses_slam_frame))
 
-slam_data_world_frame_tum = []
-with open(f'{outpath}/slam_data_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
+body_poses_world_frame_tum = []
+with open(f'{outpath}/body_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(body_poses_world_frame_tum))
 
 ### Write SLAM KF trajectory
 
-slam_kf_data_world_frame = []
-slam_kf_data_slam_frame = []
+kf_body_poses_world_frame = []
+kf_slam_poses_slam_frame = []
 for i in range(slam_kf_data.shape[0]):
 
     T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
-    slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
+    kf_slam_poses_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
 
     T_body_world = Transforms.T_slam_world @ T_body_slam
 
-    slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
+    kf_body_poses_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
 
     j = {
         "t": slam_kf_data[i,0],
@@ -371,8 +390,8 @@ for i in range(slam_kf_data.shape[0]):
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
 
 
-with open(f'{out_ml}/slam_kf_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_world_frame))
-with open(f'{out_ml}/slam_kf_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_slam_frame))
+with open(f'{out_ml}/kf_body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(kf_body_poses_world_frame))
+with open(f'{out_ml}/kf_slam_poses_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(kf_slam_poses_slam_frame))
 
 
 ### Write Infra1 frames to output directory, and provide references in all_data
@@ -440,12 +459,4 @@ json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.s
 # So all synthetic files will have a unique name
 
 
-to_dump = {
-    "meta": {
-        "slam_freq": args.synthetic_slam_frequency,
-        "generated_slam_freq": generated_fgt,
-        "uwb_freq": args.synthetic_uwb_frequency,
-        "generated_uwb_freq": generated_fuwb
-    }
-}
 json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)

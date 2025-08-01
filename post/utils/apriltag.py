@@ -19,7 +19,7 @@ import yaml
 
 import csv
 import matplotlib
-# matplotlib.use("TkAgg")
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
@@ -58,51 +58,59 @@ def clear_directory(dir_path):
         except Exception as e:
             print(f"Failed to delete {file_path}. Reason: {e}")
 
-
 def draw_detection(frame, detection, out_path, CAM1_INTRINSICS):
-        corners = detection.corners
-        pose_R = detection.pose_R
-        pose_t = detection.pose_t
+    corners = detection.corners  # shape: (4, 2)
+    pose_R = detection.pose_R    # shape: (3, 3)
+    pose_t = detection.pose_t    # shape: (3, 1)
 
-        # Project axes into image
-        axis_length = 0.3  # meters
-        tip_length = 0.15
+    axis_length = 0.3  # meters
+    tip_length = 0.15
 
-        # Define axes in 3D
-        origin_3d = pose_t
-        axes_3d = np.array([
-            origin_3d,                             # origin
-            origin_3d + pose_R @ np.array([[axis_length], [0], [0]]),  # X-axis
-            origin_3d + pose_R @ np.array([[0], [axis_length], [0]]),  # Y-axis
-            origin_3d + pose_R @ np.array([[0], [0], [axis_length]])   # Z-axis
-        ])
+    # Define 3D axes relative to pose
+    axes_3d = np.array([
+        [0, 0, 0],
+        [axis_length, 0, 0],
+        [0, axis_length, 0],
+        [0, 0, axis_length]
+    ]).reshape(-1, 3)
 
-        # Project to image plane
-        camera_matrix = np.array([
-            [CAM1_INTRINSICS[0], 0, CAM1_INTRINSICS[2]],
-            [0, CAM1_INTRINSICS[1], CAM1_INTRINSICS[3]],
-            [0, 0, 1]
-        ])
-        dist_coeffs = np.zeros(5)  # Assuming undistorted
+    # Camera intrinsics
+    camera_matrix = np.array([
+        [CAM1_INTRINSICS[0], 0, CAM1_INTRINSICS[2]],
+        [0, CAM1_INTRINSICS[1], CAM1_INTRINSICS[3]],
+        [0, 0, 1]
+    ])
+    dist_coeffs = np.zeros(5)  # Assuming undistorted image
 
-        imgpts, _ = cv2.projectPoints(axes_3d, np.zeros((3,1)), np.zeros((3,1)), camera_matrix, dist_coeffs)
-        imgpts = imgpts.astype(int).reshape(-1, 2)
+    # Project axes
+    imgpts, _ = cv2.projectPoints(axes_3d, cv2.Rodrigues(pose_R)[0], pose_t, camera_matrix, dist_coeffs)
+    imgpts = imgpts.astype(int).reshape(-1, 2)
 
-        img = cv2.cvtColor(frame["raw"], cv2.COLOR_GRAY2BGR)
+    img = cv2.cvtColor(frame["raw"], cv2.COLOR_GRAY2BGR)
 
-        origin = tuple(imgpts[0])
-        cv2.arrowedLine(img, origin, tuple(imgpts[1]), (0, 0, 255), 2, tipLength=tip_length)  # X - red
-        cv2.arrowedLine(img, origin, tuple(imgpts[2]), (0, 255, 0), 2, tipLength=tip_length)  # Y - green
-        cv2.arrowedLine(img, origin, tuple(imgpts[3]), (255, 0, 0), 2, tipLength=tip_length)  # Z - blue
+    # Draw AprilTag corner points
+    for pt in corners:
+        pt = tuple(map(int, pt))
+        cv2.circle(img, pt, 4, (0, 255, 255), -1)  # yellow
 
-        # Save image
-        out_path = out_path + f"/apriltag_pose_{frame['name']}.png"
-        cv2.imwrite(out_path, img)
-        print(f"Saved AprilTag pose image to {out_path}")
+    # Draw pose axes
+    origin = tuple(imgpts[0])
+    cv2.arrowedLine(img, origin, tuple(imgpts[1]), (0, 0, 255), 2, tipLength=tip_length)   # X - red
+    cv2.arrowedLine(img, origin, tuple(imgpts[2]), (0, 255, 0), 2, tipLength=tip_length)   # Y - green
+    cv2.arrowedLine(img, origin, tuple(imgpts[3]), (255, 0, 0), 2, tipLength=tip_length)   # Z - blue
+
+    # Show image in a popup
+    # window_name = f"AprilTag Pose - {frame['name']}"
+    # cv2.imshow(window_name, img)
+    # cv2.waitKey(0)
+    # cv2.destroyWindow(window_name)
+
+    # Save image
+    full_path = f"{out_path}/apriltag_pose_{detection.tag_id}.png"
+    cv2.imwrite(full_path, img)
+    print(f"Saved AprilTag pose image to {full_path}")
 
 def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
-    ### The SLAM frame is defined at the starting pose of the IMU in the world frame.
-    ### My body frame, is defined as a rotation out of the IMU frame.
 
     ZERO_TIMESTAMP = slam_data[0][0]
 
@@ -110,7 +118,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
     # Remember CAM0 corresponds to infra1
     CAM1_INTRINSICS = tuple(calibration['cam0']['intrinsics'])
-    TAG_SIZE = 0.200 #10cm tags
+    TAG_SIZE = 0.200 #20cm tags
 
     at_detector = Detector(
         families="tag36h11",
@@ -163,32 +171,35 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     print(f"Best match \n {best_match=}")
     print(f"Time delay of {lowest_match_delay}s")
 
-    draw_detection(best_match[1], best_match[0][0], detect_dbg_path, CAM1_INTRINSICS)
+    for match in best_match[0]:
+        print(match)
+        draw_detection(best_match[1], match, detect_dbg_path, CAM1_INTRINSICS)
 
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
-    # Note: Python '@' operator associates a chain in reverse of how you would write it out in right multiplication
-    # H_a_to_b is the HTM that maps from frame A to frame B.
+    ### ORBSLAM3 outputs the pose of the left camera over time.
+    ### Therefore frames 'cam1' and 'sbody' are analogous
+    ### My body frame is defined as a rotation out of the IMU frame.
 
-    H_cam1_to_tag = np.eye(4)
+    # Note: Python '@' operator associates a chain in reverse of how you would write it out in right multiplication
+    # T_a_to_b is the HTM that transforms a vector from frame A to frame B.
+
+    T_cam1_to_tag = np.eye(4)
     # The detection we use should always be the one with the highest decision margin
     # detection = sorted(best_match[0], key=lambda x: x.decision_margin, reverse= True)[0]
     detection = best_match[0][1]
     print(f"Using detection {detection=}")
 
-    H_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
-    H_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
+    T_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
+    T_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
 
     pose_slam = slam_quat_to_HTM(best_match[2])
-    H_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
-    # Slam body is the left camera frame. So sbody and cam1 are equivalent.
+    T_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
     # The starting point of cam1 in space is the slam origin.
 
-    # So sbody(t) and cam1(t) are interchangeable -> but only if at the same time!
-    H_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu']) 
 
     DETECTED_ID = str(detection.tag_id)
-    H_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
+    T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
 
     # # How you would write it by hand (doesn't work)
     # # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
@@ -199,22 +210,26 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     #     @ np.linalg.inv(H_sorigin_to_sbody)
     # )
 
-        # How you would write it by hand (doesn't work)
-    # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
-    H_world_to_sorigin = (
-        H_world_to_tag
-        @ np.linalg.inv(H_cam1_to_tag)
-        @ np.linalg.inv(H_sorigin_to_sbody)
+    # How you would write it by hand (doesn't work)
+    # T_world_to_sorigin = np.linalg.inv(T_sorigin_to_sbody) @ np.linalg.inv(T_cam1_to_tag) @ T_world_to_tag
+    T_world_to_sorigin = (
+        T_world_to_tag
+        @ np.linalg.inv(T_cam1_to_tag)
+        @ np.linalg.inv(T_sorigin_to_sbody)
     )
 
-    Transforms.T_slam_world = H_world_to_sorigin 
+    Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
+    Transforms.T_imu_to_sbody = Transforms.T_imu_to_cam1
+    Transforms.T_world_to_sorigin = T_world_to_sorigin
+
+    Transforms.T_slam_world = T_world_to_sorigin 
     # Transforms uses older notation T_slam_world, transform from world to slam origin, i.e. poes of slam origin in world frame
 
     world_frame_dbg = SimpleNamespace()
-    world_frame_dbg.H_world_to_sorigin = H_world_to_sorigin
-    world_frame_dbg.H_world_to_tag = H_world_to_tag
+    world_frame_dbg.H_world_to_sorigin = T_world_to_sorigin
+    world_frame_dbg.H_world_to_tag = T_world_to_tag
     world_frame_dbg.origin = np.eye(4)
-    world_frame_dbg.origin_to_aprilframe = H_cam1_to_tag @ np.eye(4) # Suppose the camera frame is at the origin, what is the reported aprilframe?
+    world_frame_dbg.origin_to_aprilframe = T_cam1_to_tag @ np.eye(4) # Suppose the camera frame is at the origin, what is the reported aprilframe?
 
     print(Transforms)
 
@@ -299,7 +314,8 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     print(f"Best match \n {best_match=}")
     print(f"Time delay of {lowest_match_delay}s")
 
-    draw_detection(best_match[1], best_match[0][0], detect_dbg_path, CAM1_INTRINSICS)
+    for match in best_match[0]:
+        draw_detection(best_match[1], match, detect_dbg_path, CAM1_INTRINSICS)
 
     # Now use PnP solver to compute the transform 'T_slam_world?' using multiple tags.
     # How to convert cam1 intrinsics vector to matrix?
@@ -337,7 +353,6 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
 
         for corner_tagframe, corner_imageframe in zip(corners_in_tag_frame, detection.corners):
             
-            corner_worldframe = H_world_to_tag[:3, :3] * corner_tagframe 
             worldPoints.append(  (H_world_to_tag @ np.hstack([corner_tagframe, 1]))[:3]  ) # Append and then truncate a 1 from the vector
             imagePoints.append(corner_imageframe)
 
@@ -348,47 +363,47 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     print(worldPoints)
     print(imagePoints)
 
-        # --- Plotting
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.set_title("2D Image Points from AprilTag Detection")
-    ax.set_xlabel("Pixel X")
-    ax.set_ylabel("Pixel Y")
-    ax.invert_yaxis()  # Origin is usually top-left in images
+    #     # --- Plotting
+    # fig, ax = plt.subplots(figsize=(8, 6))
+    # ax.set_title("2D Image Points from AprilTag Detection")
+    # ax.set_xlabel("Pixel X")
+    # ax.set_ylabel("Pixel Y")
+    # ax.invert_yaxis()  # Origin is usually top-left in images
 
-    for i, (img_pt, world_pt) in enumerate(zip(imagePoints, worldPoints)):
-        x, y = img_pt[0]
-        ax.plot(x, y, 'ro')  # Red dot
+    # for i, (img_pt, world_pt) in enumerate(zip(imagePoints, worldPoints)):
+    #     x, y = img_pt[0]
+    #     ax.plot(x, y, 'ro')  # Red dot
         
-        ax.text(x + 3, y + 3, f'image ({img_pt[0][0]:.2f}, {img_pt[0][1]:.2f})\n world ({world_pt[0]:.2f}, {world_pt[1]:.2f}, {world_pt[2]:.2f})', fontsize=8)
+    #     ax.text(x + 3, y + 3, f'image ({img_pt[0][0]:.2f}, {img_pt[0][1]:.2f})\n world ({world_pt[0]:.2f}, {world_pt[1]:.2f}, {world_pt[2]:.2f})', fontsize=8)
 
-        # Optional: draw bounding box edges (assumes 4 or 8 points in order)
-        if len(imagePoints) == 4 or len(imagePoints) == 8:
-            pts2d = np.squeeze(imagePoints, axis=1)
-            for i in range(4):  # one tag
-                ax.plot(
-                    [pts2d[i][0], pts2d[(i+1)%4][0]],
-                    [pts2d[i][1], pts2d[(i+1)%4][1]],
-                    'b-'
-                )
-            if len(pts2d) == 8:
-                for i in range(4, 8):  # second tag or depth layer
-                    ax.plot(
-                        [pts2d[i][0], pts2d[4 + (i+1)%4][0]],
-                        [pts2d[i][1], pts2d[4 + (i+1)%4][1]],
-                        'g--'
-                    )
-                # Connect verticals between two tag layers
-                for i in range(4):
-                    ax.plot(
-                        [pts2d[i][0], pts2d[i + 4][0]],
-                        [pts2d[i][1], pts2d[i + 4][1]],
-                        'k--'
-                    )
+    #     # Optional: draw bounding box edges (assumes 4 or 8 points in order)
+    #     if len(imagePoints) == 4 or len(imagePoints) == 8:
+    #         pts2d = np.squeeze(imagePoints, axis=1)
+    #         for i in range(4):  # one tag
+    #             ax.plot(
+    #                 [pts2d[i][0], pts2d[(i+1)%4][0]],
+    #                 [pts2d[i][1], pts2d[(i+1)%4][1]],
+    #                 'b-'
+    #             )
+    #         if len(pts2d) == 8:
+    #             for i in range(4, 8):  # second tag or depth layer
+    #                 ax.plot(
+    #                     [pts2d[i][0], pts2d[4 + (i+1)%4][0]],
+    #                     [pts2d[i][1], pts2d[4 + (i+1)%4][1]],
+    #                     'g--'
+    #                 )
+    #             # Connect verticals between two tag layers
+    #             for i in range(4):
+    #                 ax.plot(
+    #                     [pts2d[i][0], pts2d[i + 4][0]],
+    #                     [pts2d[i][1], pts2d[i + 4][1]],
+    #                     'k--'
+    #                 )
 
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("./april_tag_projection_plot.png", dpi=300)
-    plt.show()
+    # plt.grid(True)
+    # plt.tight_layout()
+    # plt.savefig("./april_tag_projection_plot.png", dpi=300)
+    # plt.show()
 
     H_cam1_to_tag = np.eye(4)
     detection = best_match[0][0] # Pose of tag in camera frame
@@ -421,8 +436,8 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     R, _ = cv2.Rodrigues(r_world_to_cam1)
     H_world_to_cam1 = np.eye(4)
     H_world_to_cam1[:3,:3] = R # Source: https://github.com/elenagiraldo3/april_tags_autolocalization/blob/main/detect_apriltag.py#L40
-    # H_world_to_cam1[:3,3] = ( -R.T @ t_world_to_cam1.flatten()).reshape(3) # Which one is correct?
-    H_world_to_cam1[:3,3] = t_world_to_cam1.flatten()
+    H_world_to_cam1[:3,3] = ( -R.T @ t_world_to_cam1.flatten()).reshape(3) # Which one is correct?
+    # H_world_to_cam1[:3,3] = t_world_to_cam1.flatten()
 
     pose_slam = slam_quat_to_HTM(best_match[2])
     H_sorigin_to_sbody = pose_slam
@@ -431,8 +446,10 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     H_cam1_to_sbody = np.linalg.inv(np.array(calibration['cam0']['T_cam_imu'])) # Calibration gives us transform from IMU to camera
 
 
-    # H_world_to_sorigin = (np.linalg.inv(H_sorigin_to_sbody) @ H_cam1_to_sbody) @ H_world_to_cam1
-    H_world_to_sorigin = H_world_to_cam1 @  H_cam1_to_sbody @ np.linalg.inv(H_sorigin_to_sbody)
+    # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ H_world_to_cam1
+    # Cam1 is slam body.
+
+    H_world_to_sorigin = H_world_to_cam1 @ np.linalg.inv(H_sorigin_to_sbody)
 
     Transforms.T_slam_world = H_world_to_sorigin
 

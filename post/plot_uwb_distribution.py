@@ -24,6 +24,8 @@ from utils.math_utils import *
 
 
 import matplotlib.pyplot as plt
+matplotlib.use('Agg')
+
 import traceback
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
@@ -113,8 +115,6 @@ for j in topic_to_processing['/uwb_ranges'][1]:
     if j['id'] not in ranges_log: ranges_log[j['id']] = []
     else: ranges_log[j['id']].append(j['range'])
 
-
-import matplotlib.pyplot as plt
 from scipy.stats import norm
 
 

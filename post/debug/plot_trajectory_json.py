@@ -50,7 +50,7 @@ def plot_transform(ax, T, label, length=0.2):
 def main():
     parser = argparse.ArgumentParser(description="Plot trajectory and coordinate transforms from all.json")
     parser.add_argument("all_json", help="Path to all.json file")
-    parser.add_argument("--stride", type=int, default=20, help="Stride to draw trajectory axes (default: 20)")
+    parser.add_argument("--stride", type=int, default=0, help="Stride to draw trajectory axes (default: 20)")
     parser.add_argument("--transforms_json", help="Optional transforms.json file", default=None)
     args = parser.parse_args()
 
@@ -75,8 +75,9 @@ def main():
     ax.scatter(*positions[0], color='green', label='Start')
     ax.scatter(*positions[-1], color='red', label='End')
 
-    for i in range(0, len(transforms), args.stride):
-        draw_axes(ax, transforms[i], length=0.4)
+    if args.stride > 0:
+        for i in range(0, len(transforms), args.stride):
+            draw_axes(ax, transforms[i], length=0.4)
 
     # Optional: load static transforms from separate transforms.json
     if args.transforms_json:

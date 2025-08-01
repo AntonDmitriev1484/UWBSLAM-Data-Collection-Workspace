@@ -42,7 +42,8 @@ parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
 parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
-parser.add_argument("--real_uwb_orientation_support", default=True, type=bool) 
+parser.add_argument("--real_uwb_orientation_support", default=True, type=bool)
+parser.add_argument("--override_april_start", type=str )
 # With real UWB ranges, but no compass, attach a pose to each uwb measurement using interpolation.
 # Setting this flag interpolates N=100 poses between each SLAM pose, and maps them onto the temporally closest UWB range.
 
@@ -114,6 +115,12 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
                 uwb_message_count +=1
             continue  # optionally log here
 
+# Processors functions have now buffered their individual topics into arr_ref
+# This is useful for writing the same datastream to multiple files.
+# Then, lastly, we can create all.json using the buffered measurements.
+
+
+
 # Filter for messages within bag timestamp range.
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
@@ -127,15 +134,23 @@ def filtt2(arr): # For filtering a CSV output
     if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
     return list(filter(lambda x: (START <= x[0] <= END), arr))
 
+### Define all coordinate transforms
 Transforms = SimpleNamespace()
+Transforms.T_body_to_imu = np.array([
+                                        [1, 0, 0, 0],
+                                        [0, 0, 1, 0],
+                                        [0, -1, 0, 0],
+                                        [0, 0, 0, 1]
+                                    ])
+Transforms.T_body_to_decawave = np.eye(4)
+Transforms.T_body_to_decawave = np.array([-0.045, -0.15, -0.025])
+
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 # Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 
-
-# Processors functions have now buffered their individual topics into arr_ref
-# This is useful for writing the same datastream to multiple files.
-# Then, lastly, we can create all.json using the buffered measurements.
+if args.override_april_start is not None:
+    Transforms.T_slam_world[:3, 3] = np.array(json.loads(args.override_april_start))
 
 
 ### Write UWB data to its own csv file, and to all_data
@@ -147,8 +162,6 @@ for j in topic_to_processing['/uwb_ranges'][1]:
     uwb_csv.append(csv_row)
     all_data.append(j)
     uwb_range_distribution.append(j['range'])
-
-# print(all_data[:200]) # So at this point there are uwb messages in all_data 'uwb'
 
 with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
@@ -435,4 +448,4 @@ to_dump = {
         "generated_uwb_freq": generated_fuwb
     }
 }
-json.dump(to_dump, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)
+json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)

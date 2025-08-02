@@ -220,7 +220,7 @@ for i in range(slam_data.shape[0]-1):
 
     body_poses_world_frame.append( [slam_data[i,0]] + list(T_world_to_body.flatten()) )
 
-    # NOTE: Not changing these field names because I don't want to blow up my debugging code
+    # NOTE: Not changing these field names because I don't want to blow up all downstream programs
     j = {
         "t": slam_data[i,0],
         "type": "slam_pose",

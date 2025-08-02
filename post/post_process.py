@@ -12,10 +12,12 @@ import argparse
 import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 from types import SimpleNamespace
 
 import shutil
 import math
+import copy
 
 from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
@@ -33,16 +35,23 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 parser = argparse.ArgumentParser(description="Stream collector")
 parser.add_argument("--trial_name" , "-t", type=str)
 parser.add_argument("--calibration_file", "-c", type=str)
+parser.add_argument("--crop_start", type=float) # Pass the ROS timestamp that you want to crop away all data before. Data will still be used to compute transforms.
+parser.add_argument("--alias", type=str) # Alias for a dataset, ex. if you want to keep a cropped and uncropped version of a dataset
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
-parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20
+parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
+parser.add_argument("--real_uwb_orientation_support", default=True, type=bool)
+parser.add_argument("--override_april_start", type=str )
+# With real UWB ranges, but no compass, attach a pose to each uwb measurement using interpolation.
+# Setting this flag interpolates N=100 poses between each SLAM pose, and maps them onto the temporally closest UWB range.
+
 
 args = parser.parse_args()
 
-
 outpath = f'./out/{args.trial_name}_post'
+if args.alias is not None: f'./out/{args.alias}_post'
 out_infra1 = f'{outpath}/infra1'
 out_infra2 = f'{outpath}/infra2'
 out_ml = f'{outpath}/ml'
@@ -87,7 +96,6 @@ print(rostypes)
 
 uwb_message_count = 0
 processed_uwb_message = 0
-
 # Create reader instance and open for reading.
 with AnyReader([bagpath], default_typestore=rostypes) as reader:
     connections = [x for x in reader.connections if x.topic in dataset_topics]
@@ -107,32 +115,53 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
                 uwb_message_count +=1
             continue  # optionally log here
 
-print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages")
-
-# Filter for messages within bag timestamp range.
-START = reader.start_time * 1e-9
-END = reader.end_time * 1e-9
-print(f"ROS duration {START} - {END}")
-def filtt(arr): return list(filter(lambda x: (START <= x["t"] <= END), arr))
-def filtt2(arr): return list(filter(lambda x: (START <= x[0] <= END), arr))
-
-
-Transforms = SimpleNamespace()
-infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
-Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
-
 # Processors functions have now buffered their individual topics into arr_ref
 # This is useful for writing the same datastream to multiple files.
 # Then, lastly, we can create all.json using the buffered measurements.
 
 
+
+# Filter for messages within bag timestamp range.
+START = reader.start_time * 1e-9
+END = reader.end_time * 1e-9
+print(f"ROS duration {START} - {END}")
+print(f"Data start {START} cropped to {args.crop_start}")
+
+def filtt(arr): # For filtering a json output
+    if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x["t"]), arr)) # First filter by crop
+    return list(filter(lambda x: (START <= x["t"] <= END), arr)) # Then filter by ros timestamps
+def filtt2(arr): # For filtering a CSV output
+    if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
+    return list(filter(lambda x: (START <= x[0] <= END), arr))
+
+### Define all coordinate transforms
+Transforms = SimpleNamespace()
+Transforms.T_body_to_imu = np.array([
+                                        [1, 0, 0, 0],
+                                        [0, 0, 1, 0],
+                                        [0, -1, 0, 0],
+                                        [0, 0, 0, 1]
+                                    ])
+Transforms.T_body_to_decawave = np.eye(4)
+Transforms.T_body_to_decawave = np.array([-0.045, -0.15, -0.025])
+
+infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
+Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+# Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+
+if args.override_april_start is not None:
+    Transforms.T_slam_world[:3, 3] = np.array(json.loads(args.override_april_start))
+
+
 ### Write UWB data to its own csv file, and to all_data
 uwb_csv = []
+uwb_range_distribution = []
 for j in topic_to_processing['/uwb_ranges'][1]:
     csv_row = []
     for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
     uwb_csv.append(csv_row)
     all_data.append(j)
+    uwb_range_distribution.append(j['range'])
 
 with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
@@ -146,8 +175,8 @@ for j in topic_to_processing['/camera/camera/imu'][1]:
 with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
 ### Write SLAM camera trajectory
-slam_data_world_frame = []
-slam_data_slam_frame = []
+body_poses_world_frame = [] # More accurately, this is a list of T_world_to_body
+slam_poses_slam_frame = [] # This is a list of T_sorigin_to_sbody
 slam_pose_counter = 0
 
 all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
@@ -158,9 +187,10 @@ if (args.synthetic_slam_frequency > dataset_slam_pose_frequency):
     print("Error: can't be doin that buddy")
     exit()
 
+### Synthetic data generation happens alongside all of the regular world frame transforms
+# Should really separate this code out...
 n_slam_skip = 0
 if args.synthetic_slam_frequency > 0: n_slam_skip = int(dataset_slam_pose_frequency/args.synthetic_slam_frequency)
-
 if args.synthetic_uwb_frequency > dataset_slam_pose_frequency:
     n_points = int(args.synthetic_uwb_frequency / dataset_slam_pose_frequency) # How much we need to interpolate between existing orbslam points to get this frequency of UWB
     n_skip = 1
@@ -175,20 +205,27 @@ print(f"{n_points=} {n_skip=} {n_slam_skip=}")
 
 if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.interpolate_slam=} .")
 
-
 for i in range(slam_data.shape[0]-1):
 
-    T_body_slam = slam_quat_to_HTM(slam_data[i,:])
-    slam_data_slam_frame.append( [slam_data[i,0]] + list(T_body_slam.flatten()) )
+    T_sorigin_to_sbody = slam_quat_to_HTM(slam_data[i,:])
+    slam_poses_slam_frame.append( [slam_data[i,0]] + list(T_sorigin_to_sbody.flatten()) )
 
-    T_body_world = Transforms.T_slam_world @ T_body_slam
-    slam_data_world_frame.append( [slam_data[i,0]] + list(T_body_world.flatten()) )
+    # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
+    T_world_to_body = (
+                        Transforms.T_world_to_sorigin 
+                       @ T_sorigin_to_sbody 
+                       @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                       @ np.linalg.inv(Transforms.T_body_to_imu)
+    )
 
+    body_poses_world_frame.append( [slam_data[i,0]] + list(T_world_to_body.flatten()) )
+
+    # NOTE: Not changing these field names because I don't want to blow up all downstream programs
     j = {
         "t": slam_data[i,0],
         "type": "slam_pose",
-        "T_body_slam" : T_body_slam,
-        "T_body_world" : T_body_world
+        "T_body_slam" : T_sorigin_to_sbody,
+        "T_body_world" : T_world_to_body
     }
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
     slam_pose_counter += 1
@@ -198,25 +235,37 @@ for i in range(slam_data.shape[0]-1):
     if n_skip > 0 and (slam_pose_counter % n_skip == 0) and n_points > 0:
         # All in the slam frame first
         current_timestamp = slam_data[i, 0]
-        current_pose = T_body_slam
+        current_pose = T_sorigin_to_sbody
         next_pose = slam_quat_to_HTM(slam_data[i+1,:])
 
         dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / (n_points+1)
         dt = (slam_data[i+1,0] - slam_data[i, 0]) / (n_points+1)
 
-        Rotation = next_pose[:3, :3]
+        Rotato = next_pose[:3, :3]
 
-        print(f" Between t: {slam_data[i+1, 0]} and {slam_data[i, 0]}")
-        for p in range(1, n_points+1):
+        # Use Slerp to interpolate on SE(3) rotations
+        interp_interval = [slam_data[i,0], slam_data[i+1, 0]]
+        interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+        slurpy = Slerp(interp_interval, interp_rots)
+        interp_timestamps = np.linspace(slam_data[i,0], slam_data[i+1, 0], n_points)
+        interpolated_rotations = slurpy(interp_timestamps)
+
+        # Use kinematics to interpolate on R3 positions
+        for p in range(1, n_points+1): # I think theres also a SCIPY function to do this cleaner, like SLERP but for XYZ.
 
             interp_slam_pose = np.eye(4)
             interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
-            interp_slam_pose[:3, :3] = Rotation
+            # interp_slam_pose[:3, :3] = Rotation
+            interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix() # T_sorigin_to_sbody
 
-            interp_world_pose = Transforms.T_slam_world @ interp_slam_pose  
+            interp_world_pose = (
+                        Transforms.T_world_to_sorigin 
+                       @ interp_slam_pose 
+                       @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                       @ np.linalg.inv(Transforms.T_body_to_imu)
+            )
 
             interp_timestamp = current_timestamp + (p * dt)
-            print(f" Interpolated timestamp is {interp_timestamp}")
 
             j = { # Note: Only going to interpolate into all.json because I just need this in the tracker.
                 "t": interp_timestamp,
@@ -226,45 +275,111 @@ for i in range(slam_data.shape[0]-1):
             }
             all_data_synthetic.append(j)
 
+# If we're using real UWB ranges, but have no compass
+# We interpolate on SLAM poses to match a synthetic orientation to that UWB range
+if (args.real_uwb_orientation_support):
 
-# Compute velocities in the world frame
+    N_POINTS = 100
+    all_uwb_mes = topic_to_processing['/uwb_ranges'][1]
+    swf = np.array(body_poses_world_frame)
+    for u in all_uwb_mes:
+
+        tdiffs = np.abs(swf[:,0] - u["t"])
+        slam_idx1 = np.argmin(tdiffs)
+        tdiffs[slam_idx1] = np.inf
+        slam_idx2 = np.argmin(tdiffs)
+
+        istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
+
+        # Make sure poses we're interpolating between are for the body in the world frame
+        current_pose = (
+                    Transforms.T_world_to_sorigin 
+                    @ slam_quat_to_HTM(slam_data[istart, :])
+                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                    @ np.linalg.inv(Transforms.T_body_to_imu)
+        )
+        next_pose = (
+                    Transforms.T_world_to_sorigin 
+                    @ slam_quat_to_HTM(slam_data[iend, :])
+                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                    @ np.linalg.inv(Transforms.T_body_to_imu)            
+        )
+
+        # Now interpolate between these two poses
+        interp_interval = [slam_data[istart,0], slam_data[iend, 0]]
+        interp_timestamps = np.linspace(slam_data[istart,0], slam_data[iend, 0], N_POINTS)
+
+        # Use Slerp to interpolate on SO(3) rotations
+        interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+        slurpy = Slerp(interp_interval, interp_rots)
+        interpolated_rotations = slurpy(interp_timestamps)
+
+        # Use linspace to interpolate on R3 positions
+        interpolated_positions = np.linspace(current_pose[:3, 3], next_pose[:3, 3], N_POINTS)
+
+        # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
+        idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
+
+        world_frame_pose = np.eye(4)
+        world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
+        world_frame_pose[:3, 3] = interpolated_positions[idx_match]
+
+        u2 = copy.deepcopy(u)
+        u2["type"] = "assisted_uwb"
+        u2["T_body_world"] = world_frame_pose
+        all_data.append(u2)
+
+# Compute velocities from body poses in the world frame
 # This way you can set a velocity prior at any time
 
-np_slam_data_world_frame = np.array(slam_data_world_frame)
-dt = np.diff(np_slam_data_world_frame[:,0])
-dx = np.diff(np_slam_data_world_frame[:,4]) / dt
-dy = np.diff(np_slam_data_world_frame[:,7]) / dt
-dz = np.diff(np_slam_data_world_frame[:,10]) / dt
-slam_data_velocity_world_frame = np.vstack((np_slam_data_world_frame[:np_slam_data_world_frame.shape[0]-1,0], dx, dy, dz)).T
-# TODO: Verify this is computing the right thing and in the right frame.
-# TODO: Decide on crop or not.
-print(slam_data_velocity_world_frame[:10])
+np_body_poses_world_frame = np.array(body_poses_world_frame)
+dt = np.diff(np_body_poses_world_frame[:,0])
+dx = np.diff(np_body_poses_world_frame[:,4]) / dt
+dy = np.diff(np_body_poses_world_frame[:,7]) / dt
+dz = np.diff(np_body_poses_world_frame[:,10]) / dt
+slam_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
+# By default. I map the velocity between t and t+1 to timestamp t. This should be good enough for prioring.
+# These are of dubious quality.... lol
+
+print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {slam_data_velocity_world_frame[0][0]}")
+
+# For all slam poses
+slam_idx = 0
+for i, mes in enumerate(all_data):
+    if mes["type"] == "slam_pose":
+        mes_ = mes
+        if slam_idx < slam_data_velocity_world_frame.shape[0]:
+            mes_["v_world"] = {
+                "vx": slam_data_velocity_world_frame[ slam_idx, 1],
+                "vy": slam_data_velocity_world_frame[ slam_idx, 2],
+                "vz": slam_data_velocity_world_frame[ slam_idx, 3]
+            }
+        all_data[i] = mes_ # Extend each pose to also include its computed velocity
+        slam_idx +=1
 
 
 
-with open(f'{out_ml}/slam_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_world_frame))
-with open(f'{out_ml}/slam_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_data_slam_frame))
 
-slam_data_world_frame_tum = []
-# timestamps = []
-# for row in slam_data_world_frame:
-#     slam_data_world_frame_tum.append(slam_HTM_to_TUM(row))
-#     timestamps.append(row[0])
-# with open(f'{outpath}/timestamps.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
-with open(f'{outpath}/slam_data_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(slam_data_world_frame_tum))
+
+
+with open(f'{out_ml}/body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(body_poses_world_frame))
+with open(f'{out_ml}/slam_poses_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_poses_slam_frame))
+
+body_poses_world_frame_tum = []
+with open(f'{outpath}/body_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(body_poses_world_frame_tum))
 
 ### Write SLAM KF trajectory
 
-slam_kf_data_world_frame = []
-slam_kf_data_slam_frame = []
+kf_body_poses_world_frame = []
+kf_slam_poses_slam_frame = []
 for i in range(slam_kf_data.shape[0]):
 
     T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
-    slam_kf_data_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
+    kf_slam_poses_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
 
     T_body_world = Transforms.T_slam_world @ T_body_slam
 
-    slam_kf_data_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
+    kf_body_poses_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
 
     j = {
         "t": slam_kf_data[i,0],
@@ -275,8 +390,8 @@ for i in range(slam_kf_data.shape[0]):
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
 
 
-with open(f'{out_ml}/slam_kf_data_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_world_frame))
-with open(f'{out_ml}/slam_kf_data_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_kf_data_slam_frame))
+with open(f'{out_ml}/kf_body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(kf_body_poses_world_frame))
+with open(f'{out_ml}/kf_slam_poses_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(kf_slam_poses_slam_frame))
 
 
 ### Write Infra1 frames to output directory, and provide references in all_data
@@ -309,18 +424,10 @@ shutil.copy(in_apriltags, f'{outpath}/apriltags.json')
 with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
 
-# Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
-all_data = filtt(all_data)
-all_data = sorted(all_data, key=lambda x: x["t"])
-json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
-
-# All data syntehtic is real IMU + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
-all_data_synthetic = filtt( [a for a in all_data if a["type"] == "imu"] + all_data_synthetic) 
-all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
-
-json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
-# So all synthetic files will have a unique name
-
+# Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
+print("Checking frequency of real data")
+print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
+print(f" Measured SLAM frequency {len(slam_data) / (END-START)}")
 
 print("Checking frequency of synthetic data")
 
@@ -332,15 +439,24 @@ for mes in all_data_synthetic:
 generated_fuwb = nuwb / (END-START)
 generated_fgt = ngt / (END-START)
 
+if args.crop_start is not None: # These numbers might be a bit off with crop start
+    generated_fuwb = nuwb / (END-args.crop_start)
+    generated_fgt = ngt / (END-args.crop_start)
+
 print(f" UWB requested f={args.synthetic_uwb_frequency} , generated f={generated_fuwb}")
 print(f" GT requested f={args.synthetic_slam_frequency} , generated f={generated_fgt}")
 
-to_dump = {
-    "meta": {
-        "slam_freq": args.synthetic_slam_frequency,
-        "generated_slam_freq": generated_fgt,
-        "uwb_freq": args.synthetic_uwb_frequency,
-        "generated_uwb_freq": generated_fuwb
-    }
-}
-json.dump(to_dump, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)
+# Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
+all_data = filtt(all_data)
+all_data = sorted(all_data, key=lambda x: x["t"])
+json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
+
+# All data syntehtic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
+all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
+all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
+
+json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
+# So all synthetic files will have a unique name
+
+
+json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)

@@ -1,0 +1,28 @@
+---
+- name: Upload one or more files or directories from local to remote
+  hosts: DataNUCs
+  vars:
+    file_paths: []     # e.g., ["collect/ros1/file1.bag", "collect/ros1/dir1"]
+    dir: false         # set to true if pushing directories
+
+    # Example use:
+    # ansible-playbook push.yml \
+    # -e 'file_paths=["collect/ros1/dir1", "collect/ros1/dir2"]' \
+    # -e 'dir=true'
+
+  tasks:
+    - name: Upload files using copy (non-recursive)
+      when: not dir
+      copy:
+        src: "/home/antond2/ws/{{ item }}"
+        dest: "/home/admi3ev/ws/{{ item }}"
+      loop: "{{ file_paths }}"
+
+    - name: Upload directories using synchronize (recursive)
+      when: dir
+      synchronize:
+        src: "/home/antond2/ws/{{ item }}/"
+        dest: "/home/admi3ev/ws/{{ item }}"
+        mode: push
+        recursive: yes
+      loop: "{{ file_paths }}"

@@ -1,0 +1,31 @@
+---
+- name: Download one or more files or directories from remote to local
+  hosts: DataNUCs
+  vars:
+    file_paths: []     # e.g., ["collect/ros1/file1.bag", "collect/ros1/dir1"]
+    dir: false   # set to true if pulling directories
+
+
+    # Example use:
+    # ansible-playbook pull.yml \
+    # -e 'file_paths=["collect/ros1/dir1","collect/ros1/dir2"]' \
+    # -e 'dir=true' # <- just leave this option off if you're not pulling a directory
+
+
+  tasks:
+    - name: Download files using fetch (non-recursive)
+      when: not dir
+      fetch:
+        src: "/home/admi3ev/ws/{{ item }}"
+        dest: "/home/antond2/ws/{{ item }}"
+        flat: yes
+      loop: "{{ file_paths }}"
+
+    - name: Download directories using synchronize (recursive)
+      when: dir
+      synchronize:
+        src: "/home/admi3ev/ws/{{ item }}/"
+        dest: "/home/antond2/ws/{{ item }}"
+        mode: pull
+        recursive: yes
+      loop: "{{ file_paths }}"

@@ -135,6 +135,7 @@ def filtt2(arr): # For filtering a CSV output
     if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
     return list(filter(lambda x: (START <= x[0] <= END), arr))
 
+
 ### Define all coordinate transforms
 Transforms = SimpleNamespace()
 Transforms.T_body_to_imu = np.array([
@@ -145,7 +146,8 @@ Transforms.T_body_to_imu = np.array([
                                     ])
 
 Transforms.T_body_to_decawave = np.eye(4)
-Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025])
+# Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
+Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)

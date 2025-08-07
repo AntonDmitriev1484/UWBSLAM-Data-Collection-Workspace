@@ -145,10 +145,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     for frame in infra1_raw_frames:
         detections_ = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
         if len(detections_) > 0:
-            ignore = False # A wee bit of hard coding for room 2406 case
-            for detection in detections_:
-                if detection.tag_id < 5: ignore = True
-            if not ignore: all_detections.append((detections_, frame))
+            all_detections.append((detections_, frame))
 
     # First pick 20 candidates with the highest decision margin (higher is better)
     # x[0][0] because x[0] is an array of multiple detections

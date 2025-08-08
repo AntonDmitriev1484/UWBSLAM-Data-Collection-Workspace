@@ -23,6 +23,7 @@ from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
 from utils.apriltag import *
 from utils.math_utils import *
+from utils.vicon_parser import *
 
 
 import matplotlib.pyplot as plt
@@ -66,6 +67,7 @@ os.makedirs(out_infra1, exist_ok=True)
 os.makedirs(out_infra2, exist_ok=True)
 os.makedirs(out_ml, exist_ok=True)
 os.makedirs(out_synthetic, exist_ok=True)
+os.makedirs(out_world, exist_ok=True)
 
 in_slam = f'../orbslam/out/{args.trial_name}_cam_traj.txt'
 in_slam_kf = f'../orbslam/out/{args.trial_name}_kf_traj.txt'
@@ -76,11 +78,9 @@ in_anchors = f"../world/{args.anchors_file}"
 
 bagpath = Path(f'../collect/ros2/{args.trial_name}')
 
-vicon_data = np.loadtxt(in_vicon)
-slam_kf_data = np.loadtxt(in_slam_kf)
-slam_kf_data[:,0] *= 1e-9
-slam_data = np.loadtxt(in_slam)
-slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
+headset_data, anchor_data = parse_vicon(in_vicon) # TODO: Write a parsing function for the vicon files
+# headset_data contains the pose of the marker I had on the decawave antenna in the world frame.
+
 
 # Need to maintain another array that we can buffer data to before dumping one sensor per csv
 topic_to_processing = {
@@ -94,8 +94,6 @@ all_data = []
 dataset_topics = [ k for k,v in topic_to_processing.items()]
 gt_standalone = []
 
-
-ZERO_TIMESTAMP = slam_data[0][0]
 
 rostypes = load_rostypes()
 print(rostypes)
@@ -133,6 +131,11 @@ END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
+print(f" Vicon frequency { headset_data.shape[0] / (END-START)}")
+f_vicon = 100
+headset_data = adjust_vicon_timestamps(headset_data, START, END, f_vicon)
+# Need to adjust vicon data to actual timestamps instead of just frame indices
+
 def filtt(arr): # For filtering a json output
     if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x["t"]), arr)) # First filter by crop
     return list(filter(lambda x: (START <= x["t"] <= END), arr)) # Then filter by ros timestamps
@@ -153,6 +156,12 @@ Transforms.T_vmark_to_anchor = np.array([])
 #Transform from vicon marker to the center of an Apriltag
 Transforms.T_vmark_to_tag = np.array([])
 
+T_world_to_anchormarker = np.eye(4)
+T_world_to_anchormarker[:3, 3] = anchor_data[0, 1:4]
+Transforms.T_world_to_anchor = T_world_to_anchormarker
+
+# Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
+
 Transforms.T_body_to_imu = np.array([
                                         [1, 0, 0, 0],
                                         [0, 0, 1, 0],
@@ -167,6 +176,11 @@ Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 
 if not args.no_orbslam:
+    slam_kf_data = np.loadtxt(in_slam_kf)
+    slam_kf_data[:,0] *= 1e-9
+    slam_data = np.loadtxt(in_slam)
+    slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
+    ZERO_TIMESTAMP = slam_data[0][0]
 
     Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
     # Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
@@ -352,13 +366,13 @@ if not args.no_orbslam:
             istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
 
             # Need to get an HTM, but don't need to convert to body in world frame, because we're already in the body frame.
-            current_pose = slam_quat_to_HTM(vicon_data[istart, :])
-            next_pose = slam_quat_to_HTM(vicon_data[iend, :])
+            current_pose = slam_quat_to_HTM(headset_data[istart, :])
+            next_pose = slam_quat_to_HTM(headset_data[iend, :])
 
 
             # Now interpolate between these two poses
-            interp_interval = [vicon_data[istart,0], vicon_data[iend, 0]]
-            interp_timestamps = np.linspace(vicon_data[istart,0], vicon_data[iend, 0], N_POINTS)
+            interp_interval = [headset_data[istart,0], headset_data[iend, 0]]
+            interp_timestamps = np.linspace(headset_data[istart,0], headset_data[iend, 0], N_POINTS)
 
             # Use Slerp to interpolate on SO(3) rotations
             interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
@@ -389,22 +403,22 @@ if not args.no_orbslam:
     dx = np.diff(np_body_poses_world_frame[:,4]) / dt
     dy = np.diff(np_body_poses_world_frame[:,7]) / dt
     dz = np.diff(np_body_poses_world_frame[:,10]) / dt
-    vicon_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
+    headset_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
     # By default. I map the velocity between t and t+1 to timestamp t. This should be good enough for prioring.
     # These are of dubious quality.... lol
 
-    print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {vicon_data_velocity_world_frame[0][0]}")
+    print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {headset_data_velocity_world_frame[0][0]}")
 
     # For all slam poses
     slam_idx = 0
     for i, mes in enumerate(all_data):
         if mes["type"] == "slam_pose":
             mes_ = mes
-            if slam_idx < vicon_data_velocity_world_frame.shape[0]:
+            if slam_idx < headset_data_velocity_world_frame.shape[0]:
                 mes_["v_world"] = {
-                    "vx": vicon_data_velocity_world_frame[ slam_idx, 1],
-                    "vy": vicon_data_velocity_world_frame[ slam_idx, 2],
-                    "vz": vicon_data_velocity_world_frame[ slam_idx, 3]
+                    "vx": headset_data_velocity_world_frame[ slam_idx, 1],
+                    "vy": headset_data_velocity_world_frame[ slam_idx, 2],
+                    "vz": headset_data_velocity_world_frame[ slam_idx, 3]
                 }
             all_data[i] = mes_ # Extend each pose to also include its computed velocity
             slam_idx +=1
@@ -540,23 +554,22 @@ else: # No ORBSLAM available
     all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
 
     # TODO: Write vicon poses to all_json and body_poses_world_frame
-    # let vicon_data be formatted like slam_data, i.e. TUM and timestamp
+    # let headset_data be formatted like slam_data, i.e. TUM and timestamp
     # then I can convert to HTM
 
-    for i in range(vicon_data.shape[0]-1):
+    for i in range(headset_data.shape[0]-1):
 
-        T_world_to_body = get_T_world_to_body(T_sorigin_to_sbody) # SO I just need to work out the coord frame here
-
-        body_poses_world_frame.append( [slam_data[i,0]] + list(T_world_to_body.flatten()) )
+        # T_world_to_body = get_T_world_to_body(T_sorigin_to_sbody) # SO I just need to work out the coord frame here
+        T_world_to_body = slam_quat_to_HTM(headset_data[i,:]) # Convert headset data from quat to HTM
+        body_poses_world_frame.append( [headset_data[i,0]] + list(T_world_to_body.flatten()) )
 
         # NOTE: Not changing these field names because I don't want to blow up all downstream programs
         j = {
-            "t": slam_data[i,0],
+            "t": headset_data[i,0],
             "type": "vicon_pose",
             "T_body_world" : T_world_to_body
         }
         all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
-        slam_pose_counter += 1
 
 
 
@@ -576,13 +589,13 @@ else: # No ORBSLAM available
             istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
 
             # Need to get an HTM, but don't need to convert to body in world frame, because we're already in the body frame.
-            current_pose = slam_quat_to_HTM(vicon_data[istart, :])
-            next_pose = slam_quat_to_HTM(vicon_data[iend, :])
+            current_pose = slam_quat_to_HTM(headset_data[istart, :])
+            next_pose = slam_quat_to_HTM(headset_data[iend, :])
 
 
             # Now interpolate between these two poses
-            interp_interval = [vicon_data[istart,0], vicon_data[iend, 0]]
-            interp_timestamps = np.linspace(vicon_data[istart,0], vicon_data[iend, 0], N_POINTS)
+            interp_interval = [headset_data[istart,0], headset_data[iend, 0]]
+            interp_timestamps = np.linspace(headset_data[istart,0], headset_data[iend, 0], N_POINTS)
 
             # Use Slerp to interpolate on SO(3) rotations
             interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
@@ -614,20 +627,20 @@ else: # No ORBSLAM available
     dx = np.diff(np_body_poses_world_frame[:,4]) / dt
     dy = np.diff(np_body_poses_world_frame[:,7]) / dt
     dz = np.diff(np_body_poses_world_frame[:,10]) / dt
-    vicon_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
+    headset_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
 
-    print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {vicon_data_velocity_world_frame[0][0]}")
+    print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {headset_data_velocity_world_frame[0][0]}")
 
     # For all slam poses
     slam_idx = 0
     for i, mes in enumerate(all_data):
         if mes["type"] == "slam_pose":
             mes_ = mes
-            if slam_idx < vicon_data_velocity_world_frame.shape[0]:
+            if slam_idx < headset_data_velocity_world_frame.shape[0]:
                 mes_["v_world"] = {
-                    "vx": vicon_data_velocity_world_frame[ slam_idx, 1],
-                    "vy": vicon_data_velocity_world_frame[ slam_idx, 2],
-                    "vz": vicon_data_velocity_world_frame[ slam_idx, 3]
+                    "vx": headset_data_velocity_world_frame[ slam_idx, 1],
+                    "vy": headset_data_velocity_world_frame[ slam_idx, 2],
+                    "vz": headset_data_velocity_world_frame[ slam_idx, 3]
                 }
             all_data[i] = mes_ # Extend each pose to also include its computed velocity
             slam_idx +=1
@@ -668,14 +681,32 @@ else: # No ORBSLAM available
 
     # Use Decawave and AprilTag marker information to compute and
     out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
-    out_apriltags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
-    with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
+    world_frame_anchors = [{
+        "ID":3,
+        "position": Transforms.T_world_to_anchor[:3, 3]
+    }]
+    json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
+    out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
+    json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
 
+
+    out_tags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
+    # TODO: 
+
+    world_frame_tags = {
+        "1": None
+    }
+    json.dump(world_frame_tags, out_tags, cls=NumpyEncoder, indent=1)
+    out_tags_trial = open(f'{outpath}/apriltags.json', 'w')
+    json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
+
+
+    with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
     # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
     print("Checking frequency of real data")
     print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-    print(f" Measured vicon frequency {len(slam_data) / (END-START)}")
+    print(f" Measured vicon frequency {headset_data.shape[0] / (END-START)}")
 
     # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
     all_data = filtt(all_data)

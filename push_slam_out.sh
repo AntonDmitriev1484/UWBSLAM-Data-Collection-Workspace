@@ -8,4 +8,4 @@ fi
 
 TRIAL=$1
 
-ansible-playbook ansible/push/push.yml -e "file_paths=['orbslam/out/${TRIAL}_cam_traj.txt', 'orbslam/out/${TRIAL}_kf_traj.txt']"
+ansible-playbook ansible/push/push.yml -e "file_paths=['orbslam/out/${TRIAL}_cam_traj.txt','orbslam/out/${TRIAL}_kf_traj.txt']"

@@ -51,7 +51,8 @@ parser.add_argument("--override_april_start", type=str )
 args = parser.parse_args()
 
 outpath = f'./out/{args.trial_name}_post'
-if args.alias is not None: f'./out/{args.alias}_post'
+if args.alias is not None: outpath = f'./out/{args.alias}_post'
+
 out_infra1 = f'{outpath}/infra1'
 out_infra2 = f'{outpath}/infra2'
 out_ml = f'{outpath}/ml'
@@ -134,6 +135,7 @@ def filtt2(arr): # For filtering a CSV output
     if args.crop_start is not None: arr = list(filter(lambda x: (args.crop_start <= x[0]), arr))
     return list(filter(lambda x: (START <= x[0] <= END), arr))
 
+
 ### Define all coordinate transforms
 Transforms = SimpleNamespace()
 Transforms.T_body_to_imu = np.array([
@@ -142,8 +144,10 @@ Transforms.T_body_to_imu = np.array([
                                         [0, -1, 0, 0],
                                         [0, 0, 0, 1]
                                     ])
+
 Transforms.T_body_to_decawave = np.eye(4)
-Transforms.T_body_to_decawave = np.array([-0.045, -0.15, -0.025])
+# Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
+Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
@@ -152,6 +156,16 @@ Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_
 if args.override_april_start is not None:
     Transforms.T_slam_world[:3, 3] = np.array(json.loads(args.override_april_start))
 
+
+# T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
+def get_T_world_to_body(T_sorigin_to_sbody): # A function because I re-use this a lot
+    T_world_to_body = (
+                    Transforms.T_world_to_sorigin 
+                    @ T_sorigin_to_sbody 
+                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                    @ np.linalg.inv(Transforms.T_body_to_imu)
+    )
+    return T_world_to_body
 
 ### Write UWB data to its own csv file, and to all_data
 uwb_csv = []
@@ -210,13 +224,7 @@ for i in range(slam_data.shape[0]-1):
     T_sorigin_to_sbody = slam_quat_to_HTM(slam_data[i,:])
     slam_poses_slam_frame.append( [slam_data[i,0]] + list(T_sorigin_to_sbody.flatten()) )
 
-    # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
-    T_world_to_body = (
-                        Transforms.T_world_to_sorigin 
-                       @ T_sorigin_to_sbody 
-                       @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                       @ np.linalg.inv(Transforms.T_body_to_imu)
-    )
+    T_world_to_body = get_T_world_to_body(T_sorigin_to_sbody)
 
     body_poses_world_frame.append( [slam_data[i,0]] + list(T_world_to_body.flatten()) )
 
@@ -258,12 +266,7 @@ for i in range(slam_data.shape[0]-1):
             # interp_slam_pose[:3, :3] = Rotation
             interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix() # T_sorigin_to_sbody
 
-            interp_world_pose = (
-                        Transforms.T_world_to_sorigin 
-                       @ interp_slam_pose 
-                       @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                       @ np.linalg.inv(Transforms.T_body_to_imu)
-            )
+            interp_world_pose = get_T_world_to_body(interp_slam_pose)
 
             interp_timestamp = current_timestamp + (p * dt)
 
@@ -292,18 +295,9 @@ if (args.real_uwb_orientation_support):
         istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
 
         # Make sure poses we're interpolating between are for the body in the world frame
-        current_pose = (
-                    Transforms.T_world_to_sorigin 
-                    @ slam_quat_to_HTM(slam_data[istart, :])
-                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                    @ np.linalg.inv(Transforms.T_body_to_imu)
-        )
-        next_pose = (
-                    Transforms.T_world_to_sorigin 
-                    @ slam_quat_to_HTM(slam_data[iend, :])
-                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                    @ np.linalg.inv(Transforms.T_body_to_imu)            
-        )
+        current_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[istart, :]))
+        next_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[iend, :]))
+
 
         # Now interpolate between these two poses
         interp_interval = [slam_data[istart,0], slam_data[iend, 0]]

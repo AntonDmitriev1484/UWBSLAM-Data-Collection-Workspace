@@ -187,19 +187,29 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_cam1_to_tag = np.eye(4)
     # The detection we use should always be the one with the highest decision margin
     # detection = sorted(best_match[0], key=lambda x: x.decision_margin, reverse= True)[0]
-    detection = best_match[0][1]
+
+    detection = None # Find best tag detection within our selected detection
+    best_margin = 0
+    for d in best_match[0]:
+        if d.decision_margin > best_margin:
+            best_margin = d.decision_margin
+            detection = d
     print(f"Using detection {detection=}")
 
     T_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
     T_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
-
+    # T_cam1_to_tag[:3, 3] = -np.matmul(T_cam1_to_tag[:3, 3], -1 * detection.pose_t.flatten())
     pose_slam = slam_quat_to_HTM(best_match[2])
     T_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
     # The starting point of cam1 in space is the slam origin.
 
 
     DETECTED_ID = str(detection.tag_id)
-    T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
+    # T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
+    # T_world_to_tag = np.linalg.inv(np.array(apriltag_world_locations[DETECTED_ID]))
+    T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID])
+    T_world_to_tag[:3,:3] = np.linalg.inv(T_world_to_tag[:3,:3]) # Ok yeah Apparently I just compute the rotation backwards always so inverting it is a must.
+    # T_world_to_tag[:3,3] = np.matmul(T_world_to_tag[:3,:3] , -1 * T_world_to_tag[:3,3])
 
     # # How you would write it by hand (doesn't work)
     # # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
@@ -435,8 +445,8 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     print(t_world_to_cam1)
     R, _ = cv2.Rodrigues(r_world_to_cam1)
     H_world_to_cam1 = np.eye(4)
-    H_world_to_cam1[:3,:3] = R # Source: https://github.com/elenagiraldo3/april_tags_autolocalization/blob/main/detect_apriltag.py#L40
-    H_world_to_cam1[:3,3] = ( -R.T @ t_world_to_cam1.flatten()).reshape(3) # Which one is correct?
+    H_world_to_cam1[:3,:3] = R.T # Source: https://github.com/elenagiraldo3/april_tags_autolocalization/blob/main/detect_apriltag.py#L40
+    H_world_to_cam1[:3,3] = np.matmul(-R.T, t_world_to_cam1.flatten()).reshape(3)
     # H_world_to_cam1[:3,3] = t_world_to_cam1.flatten()
 
     pose_slam = slam_quat_to_HTM(best_match[2])

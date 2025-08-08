@@ -198,7 +198,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     T_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
     T_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
-
+    # T_cam1_to_tag[:3, 3] = -np.matmul(T_cam1_to_tag[:3, 3], -1 * detection.pose_t.flatten())
     pose_slam = slam_quat_to_HTM(best_match[2])
     T_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
     # The starting point of cam1 in space is the slam origin.
@@ -209,7 +209,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # T_world_to_tag = np.linalg.inv(np.array(apriltag_world_locations[DETECTED_ID]))
     T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID])
     T_world_to_tag[:3,:3] = np.linalg.inv(T_world_to_tag[:3,:3]) # Ok yeah Apparently I just compute the rotation backwards always so inverting it is a must.
-    
+    # T_world_to_tag[:3,3] = np.matmul(T_world_to_tag[:3,:3] , -1 * T_world_to_tag[:3,3])
 
     # # How you would write it by hand (doesn't work)
     # # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag

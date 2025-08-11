@@ -8,4 +8,4 @@ fi
 
 BAGNAME=$1
 
-ansible-playbook ansible/pull/pull.yml -e "file_paths=["collect/ros1/${BAGNAME}.bag"
+ansible-playbook ansible/pull/pull.yml -e "file_paths=['collect/ros1/${BAGNAME}.bag']"

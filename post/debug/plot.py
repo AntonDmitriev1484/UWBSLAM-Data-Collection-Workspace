@@ -6,10 +6,15 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 def plot_transform(ax, T, label, length=0.2):
     """Draw a coordinate frame using a 4x4 transformation matrix."""
-    origin = T[:3, 3]
-    x_axis = T[:3, 0] * length
-    y_axis = T[:3, 1] * length
-    z_axis = T[:3, 2] * length
+    # origin = T[:3, 3]
+    # x_axis = T[:3, 0] * length
+    # y_axis = T[:3, 1] * length
+    # z_axis = T[:3, 2] * length
+
+    origin = (np.linalg.inv(T) @ np.array([0,0,0,1]))[:3]
+    x_axis = (np.linalg.inv(T) @ np.array([1,0,0,1]))[:3]
+    y_axis = (np.linalg.inv(T) @ np.array([0,1,0,1]))[:3]
+    z_axis = (np.linalg.inv(T) @ np.array([0,0,1,1]))[:3] 
 
     ax.quiver(*origin, *x_axis, color='r')
     ax.quiver(*origin, *y_axis, color='g')

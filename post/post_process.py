@@ -196,14 +196,12 @@ if args.override_april_start is not None:
 
         T_world_to_sorigin = rotate_about_world_x(T_world_to_sorigin, float(theta[0]))
 
-        det_ = np.linalg.det(T_world_to_sorigin[:3,:3])
-        inv_ = np.linalg.inv(T_world_to_sorigin[:3,:3])
-        is_rotation_mat = (det_ == 1) and (inv_ == T_world_to_sorigin[:3,:3].T)
-        print(f" {det_=}")
-        print(f" {inv_=}")
-        print(f"{is_rotation_mat=}")
-
-        T_world_to_sorigin[:3,:3], _ = orthogonal_procrustes(T_world_to_sorigin[:3,:3], T_world_to_sorigin[:3,:3])
+        # det_ = np.linalg.det(T_world_to_sorigin[:3,:3])
+        # inv_ = np.linalg.inv(T_world_to_sorigin[:3,:3])
+        # is_rotation_mat = (det_ == 1) and (inv_ == T_world_to_sorigin[:3,:3].T)
+        # print(f" {det_=}")
+        # print(f" {inv_=}")
+        # print(f"{is_rotation_mat=}")
 
         # Make sure you deep copy slam data every time
         score = minimize_for_world_pose(slam_data.copy(), best_Z, T_world_to_sorigin, Transforms)

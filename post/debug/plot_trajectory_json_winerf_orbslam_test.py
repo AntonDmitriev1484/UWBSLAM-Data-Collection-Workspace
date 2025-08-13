@@ -1,4 +1,3 @@
-import argparse
 import json
 import numpy as np
 import matplotlib.pyplot as plt
@@ -33,26 +32,14 @@ def draw_axes(ax, T, length=0.1):
     ax.quiver(*origin, *y_axis, color='g', length=length, normalize=False)
     ax.quiver(*origin, *z_axis, color='b', length=length, normalize=False)
 
-def plot_transform(ax, T, label, length=0.2):
-    """Draw a coordinate frame using a 4x4 transformation matrix and label at +X tip."""
-    origin = T[:3, 3]
-    x_axis = T[:3, 0] * length
-    y_axis = T[:3, 1] * length
-    z_axis = T[:3, 2] * length
-
-    ax.quiver(*origin, *x_axis, color='r')
-    ax.quiver(*origin, *y_axis, color='g')
-    ax.quiver(*origin, *z_axis, color='b')
-
-    tip_x = origin + x_axis
-    ax.text(*tip_x, label, fontsize=8)
-
 def main():
     all_json_path = "/home/antond2/ws/post/out/winerf_orbslam_test4_post/all.json"  # Hardcode your file path
     stride = 100  # Stride for drawing axes
-    Z_fixed =  0.275 # Circle height
+    Z_fixed = 0.275  # Circle height
     circle_radius = 0.5
+    circle_center = np.array([0, 3, Z_fixed])
 
+    # Load measured poses
     with open(all_json_path, 'r') as f:
         all_data = json.load(f)
 
@@ -66,29 +53,40 @@ def main():
             positions.append(T[:3, 3])
 
     positions = np.array(positions)
+    N = len(positions)
 
+    # Generate GT poses along perfect circle
+    theta = np.linspace(0, 2 * np.pi, N, endpoint=False)
+    x_gt = circle_radius * np.cos(theta) + circle_center[0]
+    y_gt = circle_radius * np.sin(theta) + circle_center[1]
+    z_gt = np.full(N, circle_center[2])
+    gt_positions = np.vstack((x_gt, y_gt, z_gt)).T
+
+    # Compute mean error
+    errors = np.linalg.norm(positions - gt_positions, axis=1)
+    print(errors)
+    mean_err = np.mean(errors)
+    # rmse = np.sqrt(np.mean(np.sum(errors**2)))
+    print(f"Mean position error vs perfect circle: {mean_err:.4f} meters")
+
+    # Plot measured trajectory
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-
-    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], label='Trajectory', color='blue')
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], label='Measured Trajectory', color='blue')
     ax.scatter(*positions[0], color='green', label='Start')
     ax.scatter(*positions[-1], color='red', label='End')
+
+    # Plot GT circle
+    ax.plot(x_gt, y_gt, z_gt, color='magenta', label=f'GT Circle at Z={Z_fixed}')
 
     if stride > 0:
         for i in range(0, len(transforms), stride):
             draw_axes(ax, transforms[i], length=0.4)
 
-    # Plot fixed circle
-    theta = np.linspace(0, 2*np.pi, 200)
-    x_circle = circle_radius * np.cos(theta) + 0
-    y_circle = circle_radius * np.sin(theta) + 3
-    z_circle = np.full_like(theta, Z_fixed)
-    ax.plot(x_circle, y_circle, z_circle, color='magenta', label=f'Circle at Z={Z_fixed}')
-
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
-    ax.set_title("Trajectory and Static Coordinate Frames")
+    ax.set_title(f"Trajectory vs GT Circle")
     ax.view_init(elev=20, azim=45)
     set_axes_equal(ax)
     ax.legend()

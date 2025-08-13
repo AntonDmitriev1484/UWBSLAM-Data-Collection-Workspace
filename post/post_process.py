@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
+from scipy.linalg import orthogonal_procrustes
 from types import SimpleNamespace
 
 import shutil
@@ -24,9 +25,13 @@ from utils.ros_msg_handlers import *
 from utils.apriltag import *
 from utils.math_utils import *
 
+from scipy.optimize import minimize
+
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+
 
 # Example usage:
 # python3 post_process.py -t stereoi_sq -c cam_target_daslab -a pilot3/anchors.json -p pilot3/apriltags.json -i 10
@@ -154,8 +159,64 @@ Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_
 # Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 
 if args.override_april_start is not None:
-    Transforms.T_slam_world[:3, 3] = np.array(json.loads(args.override_april_start))
+    # Transforms.T_world_to_sorigin[:3, :3] = np.array([[1, 0 ,0 ],
+    #                                            [0, 0, 1],
+    #                                            [0, -1, 0]])
 
+    T_prior = np.eye(4)
+    R_prior = np.array([[1, 0 ,0 ],
+                        [0, 0, 1],
+                        [0, -1, 0]], dtype=np.float64)
+    T_prior[:3,:3] = R_prior
+    T_prior[:3,3] = np.array(json.loads(args.override_april_start))
+    Transforms.T_world_to_sorigin[:3, 3] = np.array(json.loads(args.override_april_start))
+     
+    INITIAL_THETA = np.array([0]) # Initial guess on theta is 0 rad
+    # BOUNDS = [-5, 5]
+    
+    best_Z = Transforms.T_world_to_sorigin[2,3]
+
+    def rotate_about_world_x(T, theta):
+        R_about_world_x = np.array([[1, 0, 0, 0], 
+                                    [0, np.cos(theta), -np.sin(theta), 0],
+                                    [0, np.sin(theta), np.cos(theta), 0],
+                                    [0,0,0,1]], dtype=np.float64)
+        # Rotate to world frame, then rotate by the adjustment along world frame x axis.
+        T_ = T.copy()
+        # T_[:3,:3] = T[:3,:3] @ R_about_world_x # Im pretty sure this is the right order for python
+        T_ =  R_about_world_x @ T
+        return T_
+    
+    def distance_to_XY_plane_loss(theta):
+        print(f" Trying theta: {theta * 180/np.pi}")
+
+        T_world_to_sorigin = np.eye(4)
+        T_world_to_sorigin[:3,:3] = R_prior # Im pretty sure this is the right order for python
+        T_world_to_sorigin[:3,3] = Transforms.T_world_to_sorigin[:3, 3]
+
+        T_world_to_sorigin = rotate_about_world_x(T_world_to_sorigin, float(theta[0]))
+
+        # det_ = np.linalg.det(T_world_to_sorigin[:3,:3])
+        # inv_ = np.linalg.inv(T_world_to_sorigin[:3,:3])
+        # is_rotation_mat = (det_ == 1) and (inv_ == T_world_to_sorigin[:3,:3].T)
+        # print(f" {det_=}")
+        # print(f" {inv_=}")
+        # print(f"{is_rotation_mat=}")
+
+        # Make sure you deep copy slam data every time
+        score = minimize_for_world_pose(slam_data.copy(), best_Z, T_world_to_sorigin, Transforms)
+        print(f" Score {score}")
+        return score
+
+    result = minimize(distance_to_XY_plane_loss, INITIAL_THETA, method = 'Nelder-Mead')
+    result_theta = result.x[0]
+    print(f" Selected Theta: {result.x[0] * 180/np.pi}")
+    print("Final loss:", result.fun)
+
+    print(f" Initial Rotation {R_prior}")
+
+    Transforms.T_world_to_sorigin = rotate_about_world_x(T_prior, result_theta)
+    print(f" Final rotation { Transforms.T_world_to_sorigin[:3, :3]}")
 
 # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
 def get_T_world_to_body(T_sorigin_to_sbody): # A function because I re-use this a lot
@@ -371,7 +432,7 @@ for i in range(slam_kf_data.shape[0]):
     T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
     kf_slam_poses_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
 
-    T_body_world = Transforms.T_slam_world @ T_body_slam
+    T_body_world = get_T_world_to_body(T_body_slam) # TODO Update
 
     kf_body_poses_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
 

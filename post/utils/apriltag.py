@@ -209,8 +209,11 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # T_world_to_tag = np.linalg.inv(np.array(apriltag_world_locations[DETECTED_ID]))
     T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID])
     T_world_to_tag[:3,:3] = np.linalg.inv(T_world_to_tag[:3,:3]) # Ok yeah Apparently I just compute the rotation backwards always so inverting it is a must.
-    # T_world_to_tag[:3,3] = np.matmul(T_world_to_tag[:3,:3] , -1 * T_world_to_tag[:3,3])
+    # T_world_to_tag[:3,3] = -1 * np.matmul(T_world_to_tag[:3,:3] , T_world_to_tag[:3,3])
 
+    Transforms.T_world_to_tag = T_world_to_tag
+    Transforms.origin = np.eye(4)
+    
     # # How you would write it by hand (doesn't work)
     # # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
     # H_world_to_sorigin = (
@@ -246,7 +249,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
     return Transforms
-
 
 def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
 
@@ -480,6 +482,33 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
     return Transforms
+
+def minimize_for_world_pose(slam_data, best_Z, T_world_to_sorigin, Transforms):
+
+
+    def get_T_world_to_body(T_sorigin_to_sbody): # A function because I re-use this a lot
+        T_world_to_body = (
+                        T_world_to_sorigin
+                        @ T_sorigin_to_sbody 
+                        @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                        @ np.linalg.inv(Transforms.T_body_to_imu)
+        )
+        return T_world_to_body
+
+    body_poses_world_frame = []
+    zs = []
+    for i in range(slam_data.shape[0]-1):
+
+        T_sorigin_to_sbody = slam_quat_to_HTM(slam_data[i,:])
+        T_world_to_body = get_T_world_to_body(T_sorigin_to_sbody)
+        body_poses_world_frame.append( T_world_to_body )
+        zs.append(T_world_to_body[2,3])
+
+    # The best (lowest) score has the lowest total error in each poses Z-coordinate
+    # score = sum([ abs( best_Z - T_world_to_body[2,3]) ** 2 for T_world_to_body in body_poses_world_frame])
+    score = np.var(np.abs(np.array(zs)-best_Z))
+
+    return score
 
 
 if __name__ == "__main__":

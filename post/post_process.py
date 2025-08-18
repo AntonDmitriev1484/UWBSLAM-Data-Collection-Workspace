@@ -254,7 +254,9 @@ body_poses_world_frame = [] # More accurately, this is a list of T_world_to_body
 slam_poses_slam_frame = [] # This is a list of T_sorigin_to_sbody
 slam_pose_counter = 0
 
-all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
+all_data_synthetic = [] # Keep interpolated points in a separate file from all.json\
+
+#
 
 
 dataset_slam_pose_frequency = 20 # Need something evenly divisible

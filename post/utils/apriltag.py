@@ -198,9 +198,10 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     T_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
     T_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
-    # T_cam1_to_tag[:3, 3] = -np.matmul(T_cam1_to_tag[:3, 3], -1 * detection.pose_t.flatten())
+
     pose_slam = slam_quat_to_HTM(best_match[2])
     T_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
+    # Note: 
     # The starting point of cam1 in space is the slam origin.
 
 

@@ -152,11 +152,12 @@ Transforms.T_body_to_imu = np.array([
 
 Transforms.T_body_to_decawave = np.eye(4)
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
-Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
+Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1]) * -1 # -1 for being in decawave frame
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 # Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
 if args.override_april_start is not None:
     # Transforms.T_world_to_sorigin[:3, :3] = np.array([[1, 0 ,0 ],
@@ -220,12 +221,13 @@ if args.override_april_start is not None:
 
 # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
 def get_T_world_to_body(T_sorigin_to_sbody): # A function because I re-use this a lot
-    T_world_to_body = (
-                    Transforms.T_world_to_sorigin 
-                    @ T_sorigin_to_sbody 
-                    @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                    @ np.linalg.inv(Transforms.T_body_to_imu)
-    )
+    # T_world_to_body = (
+    #                 Transforms.T_world_to_sorigin 
+    #                 @ T_sorigin_to_sbody 
+    #                 @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+    #                 @ np.linalg.inv(Transforms.T_body_to_imu)
+    # )
+    T_world_to_body = np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_sbody)  @ T_sorigin_to_sbody @ Transforms.T_world_to_sorigin 
     return T_world_to_body
 
 ### Write UWB data to its own csv file, and to all_data
@@ -478,7 +480,7 @@ class NumpyEncoder(json.JSONEncoder):
 ### Copy all world information: transforms, anchors, apriltags, to output
 shutil.copy(in_anchors, f'{outpath}/anchors.json')
 shutil.copy(in_apriltags, f'{outpath}/apriltags.json')
-with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
+# with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
 
 # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph

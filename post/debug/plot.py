@@ -10,17 +10,19 @@ def plot_transform(ax, T, label, length=0.2):
     # x_axis = T[:3, 0] * length
     # y_axis = T[:3, 1] * length
     # z_axis = T[:3, 2] * length
+    H = np.linalg.inv(T)
+    origin = (H @ np.array([0,0,0,1]))[:3]
+    x_axis = (H @ np.array([1,0,0,1]))[:3]
+    y_axis = (H @ np.array([0,1,0,1]))[:3]
+    z_axis = (H @ np.array([0,0,1,1]))[:3]
 
-    origin = (np.linalg.inv(T) @ np.array([0,0,0,1]))[:3]
-    x_axis = (np.linalg.inv(T) @ np.array([1,0,0,1]))[:3]
-    y_axis = (np.linalg.inv(T) @ np.array([0,1,0,1]))[:3]
-    z_axis = (np.linalg.inv(T) @ np.array([0,0,1,1]))[:3] 
+    print(f"{origin=}")
 
-    ax.quiver(*origin, *x_axis, color='r')
-    ax.quiver(*origin, *y_axis, color='g')
-    ax.quiver(*origin, *z_axis, color='b')
+    ax.quiver(*origin, *(x_axis-origin) * length, color='r')
+    ax.quiver(*origin, *(y_axis-origin) * length, color='g')
+    ax.quiver(*origin, *(z_axis-origin) * length, color='b')
     # Place label at the tip of +X axis
-    tip_x = origin + x_axis
+    tip_x = origin + ((x_axis-origin)*length)
     ax.text(*tip_x, label, fontsize=8)
 
 
@@ -55,9 +57,13 @@ def main():
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
+    IGNORE = ["T_body_to_imu", "T_body_to_decawave", "T_imu_to_sbody"]
     for name, mat in transforms.items():
-        T = np.array(mat)
-        plot_transform(ax, T, name)
+        if "T_world_to" in name or (name == "origin"):
+            T = np.array(mat)
+            print(f"{name=}")
+            print(T)
+            plot_transform(ax, T, name)
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")

@@ -24,36 +24,38 @@ def set_axes_equal(ax):
 
 def draw_axes(ax, T, length=0.1):
     """Draw coordinate axes from transformation matrix T."""
-    origin = T[:3, 3]
-    x_axis = T[:3, 0] * length
-    y_axis = T[:3, 1] * length
-    z_axis = T[:3, 2] * length
+    H = np.linalg.inv(T)
+    origin = H @ np.array([0,0,0,1]) * length
+    x_axis = H @ np.array([1,0,0,1]) * length
+    y_axis = H @ np.array([0,1,0,1]) * length
+    z_axis = H @ np.array([0,0,1,1]) * length
 
     ax.quiver(*origin, *x_axis, color='r', length=length, normalize=False)
     ax.quiver(*origin, *y_axis, color='g', length=length, normalize=False)
     ax.quiver(*origin, *z_axis, color='b', length=length, normalize=False)
 
-def plot_transform(ax, T, label, length=0.2):
-    """Draw a coordinate frame using a 4x4 transformation matrix and label at +X tip."""
-    origin = T[:3, 3]
-    x_axis = T[:3, 0] * length
-    y_axis = T[:3, 1] * length
-    z_axis = T[:3, 2] * length
+# def plot_transform(ax, T, label, length=0.2):
+#     """Draw a coordinate frame using a 4x4 transformation matrix and label at +X tip."""
+#     origin = T[:3, 3]
+#     x_axis = T[:3, 0] * length
+#     y_axis = T[:3, 1] * length
+#     z_axis = T[:3, 2] * length
 
-    ax.quiver(*origin, *x_axis, color='r')
-    ax.quiver(*origin, *y_axis, color='g')
-    ax.quiver(*origin, *z_axis, color='b')
+#     ax.quiver(*origin, *x_axis, color='r')
+#     ax.quiver(*origin, *y_axis, color='g')
+#     ax.quiver(*origin, *z_axis, color='b')
 
-    tip_x = origin + x_axis
-    ax.text(*tip_x, label, fontsize=8)
+#     tip_x = origin + x_axis
+#     ax.text(*tip_x, label, fontsize=8)
 
 def main():
-    all_json_path = "/home/antond2/ws/post/out/winerf_orbslam_test4_post/all.json"  # Hardcode your file path
-    stride = 100  # Stride for drawing axes
-    Z_fixed =  0.275 # Circle height
-    circle_radius = 0.5
+    parser = argparse.ArgumentParser(description="Plot trajectory and coordinate transforms from all.json")
+    parser.add_argument("all_json", help="Path to all.json file")
+    parser.add_argument("--stride", type=int, default=0, help="Stride to draw trajectory axes (default: 20)")
+    parser.add_argument("--transforms_json", help="Optional transforms.json file", default=None)
+    args = parser.parse_args()
 
-    with open(all_json_path, 'r') as f:
+    with open(args.all_json, 'r') as f:
         all_data = json.load(f)
 
     transforms = []
@@ -74,16 +76,17 @@ def main():
     ax.scatter(*positions[0], color='green', label='Start')
     ax.scatter(*positions[-1], color='red', label='End')
 
-    if stride > 0:
-        for i in range(0, len(transforms), stride):
+    if args.stride > 0:
+        for i in range(0, len(transforms), args.stride):
             draw_axes(ax, transforms[i], length=0.4)
 
-    # Plot fixed circle
-    theta = np.linspace(0, 2*np.pi, 200)
-    x_circle = circle_radius * np.cos(theta) + 0
-    y_circle = circle_radius * np.sin(theta) + 3
-    z_circle = np.full_like(theta, Z_fixed)
-    ax.plot(x_circle, y_circle, z_circle, color='magenta', label=f'Circle at Z={Z_fixed}')
+    # Optional: load static transforms from separate transforms.json
+    if args.transforms_json:
+        with open(args.transforms_json, 'r') as f:
+            static_transforms = json.load(f)
+        for name, mat in static_transforms.items():
+            T = np.array(mat)
+            plot_transform(ax, T, name)
 
     ax.set_xlabel("X")
     ax.set_ylabel("Y")

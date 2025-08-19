@@ -184,7 +184,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # Note: Python '@' operator associates a chain in reverse of how you would write it out in right multiplication
     # T_a_to_b is the HTM that transforms a vector from frame A to frame B.
 
-    T_cam1_to_tag = np.eye(4)
+    T_tag_to_cam1 = np.eye(4)
     # The detection we use should always be the one with the highest decision margin
     # detection = sorted(best_match[0], key=lambda x: x.decision_margin, reverse= True)[0]
 
@@ -196,8 +196,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
             detection = d
     print(f"Using detection {detection=}")
 
-    T_cam1_to_tag[:3, :3] = detection.pose_R # Pose of tag in camera frame
-    T_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
+    T_tag_to_cam1[:3, :3] = detection.pose_R # Pose of tag in camera frame
+    T_tag_to_cam1[:3, 3] = detection.pose_t.flatten()
 
     pose_slam = slam_quat_to_HTM(best_match[2])
     T_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
@@ -206,31 +206,28 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
 
     DETECTED_ID = str(detection.tag_id)
-    # T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
-    # T_world_to_tag = np.linalg.inv(np.array(apriltag_world_locations[DETECTED_ID]))
-    T_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID])
-    T_world_to_tag[:3,:3] = np.linalg.inv(T_world_to_tag[:3,:3]) # Ok yeah Apparently I just compute the rotation backwards always so inverting it is a must.
-    # T_world_to_tag[:3,3] = -1 * np.matmul(T_world_to_tag[:3,:3] , T_world_to_tag[:3,3])
 
+    mes = np.array(apriltag_world_locations[DETECTED_ID])
+    R_tag_to_world = np.linalg.inv(mes[:3,:3])
+    t_world_to_tag_in_world = mes[:3,3]
+    T_tag_to_world = np.eye(4)
+    T_tag_to_world[:3, 3] = t_world_to_tag_in_world
+    T_tag_to_world[:3,:3] = R_tag_to_world
+    
+    T_world_to_tag = np.linalg.inv(T_tag_to_world)
     Transforms.T_world_to_tag = T_world_to_tag
+
+
     Transforms.origin = np.eye(4)
     
-    # # How you would write it by hand (doesn't work)
-    # # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ np.linalg.inv(H_sbody_to_cam1) @ np.linalg.inv(H_cam1_to_tag) @ H_world_to_tag
-    # H_world_to_sorigin = (
-    #     H_world_to_tag
-    #     @ np.linalg.inv(H_cam1_to_tag)
-    #     @ np.linalg.inv(H_sbody_to_cam1)
-    #     @ np.linalg.inv(H_sorigin_to_sbody)
-    # )
 
     # How you would write it by hand (doesn't work)
     # T_world_to_sorigin = np.linalg.inv(T_sorigin_to_sbody) @ np.linalg.inv(T_cam1_to_tag) @ T_world_to_tag
-    T_world_to_sorigin = (
-        T_world_to_tag
-        @ np.linalg.inv(T_cam1_to_tag)
-        @ np.linalg.inv(T_sorigin_to_sbody)
-    )
+    T_world_to_sorigin = T_sorigin_to_sbody @ T_tag_to_cam1 @ T_world_to_tag # Still something wrong with htis....
+    # T_world_to_sorigin = T_world_to_tag @ np.linalg.inv(T_cam1_to_tag) @ np.linalg.inv(T_sorigin_to_sbody)
+
+    Transforms.T_world_to_body_detect = T_tag_to_cam1 @ T_world_to_tag
+
 
     Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
     Transforms.T_imu_to_sbody = Transforms.T_imu_to_cam1
@@ -239,15 +236,9 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     Transforms.T_slam_world = T_world_to_sorigin 
     # Transforms uses older notation T_slam_world, transform from world to slam origin, i.e. poes of slam origin in world frame
 
-    world_frame_dbg = SimpleNamespace()
-    world_frame_dbg.H_world_to_sorigin = T_world_to_sorigin
-    world_frame_dbg.H_world_to_tag = T_world_to_tag
-    world_frame_dbg.origin = np.eye(4)
-    world_frame_dbg.origin_to_aprilframe = T_cam1_to_tag @ np.eye(4) # Suppose the camera frame is at the origin, what is the reported aprilframe?
-
     print(Transforms)
 
-    with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
+    # with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
     return Transforms
 

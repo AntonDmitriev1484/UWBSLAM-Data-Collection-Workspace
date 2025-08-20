@@ -59,7 +59,7 @@ def main():
 
     IGNORE = ["T_body_to_imu", "T_body_to_decawave", "T_imu_to_sbody"]
     for name, mat in transforms.items():
-        if "T_world_to" in name or (name == "origin"):
+        if "T_world_to" in name or (name == "origin") or (name =="T_sorigin_to_sbody"):
             T = np.array(mat)
             print(f"{name=}")
             print(T)

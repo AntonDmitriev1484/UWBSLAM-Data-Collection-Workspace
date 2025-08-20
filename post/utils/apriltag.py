@@ -223,15 +223,21 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # How you would write it by hand (doesn't work)
     # T_world_to_sorigin = np.linalg.inv(T_sorigin_to_sbody) @ np.linalg.inv(T_cam1_to_tag) @ T_world_to_tag
-    T_world_to_sorigin = T_sorigin_to_sbody @ T_tag_to_cam1 @ T_world_to_tag # Still something wrong with htis....
-    # T_world_to_sorigin = T_world_to_tag @ np.linalg.inv(T_cam1_to_tag) @ np.linalg.inv(T_sorigin_to_sbody)
-
     Transforms.T_world_to_body_detect = T_tag_to_cam1 @ T_world_to_tag
+    T_world_to_sorigin = np.linalg.inv(T_sorigin_to_sbody) @ Transforms.T_world_to_body_detect # Still something wrong with htis....
+    Transforms.T_world_to_sorigin_invslam = T_sorigin_to_sbody @ Transforms.T_world_to_body_detect # Still something wrong with htis....
+
+
+    Transforms.T_sorigin_to_sbody = T_sorigin_to_sbody # Just to debug relative to the origin
+    
+    # T_world_to_sorigin = T_world_to_tag @ np.linalg.inv(T_cam1_to_tag) @ np.linalg.inv(T_sorigin_to_sbody)
+    Transforms.T_world_to_sorigin = T_world_to_sorigin
+
+
 
 
     Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
     Transforms.T_imu_to_sbody = Transforms.T_imu_to_cam1
-    Transforms.T_world_to_sorigin = T_world_to_sorigin
 
     Transforms.T_slam_world = T_world_to_sorigin 
     # Transforms uses older notation T_slam_world, transform from world to slam origin, i.e. poes of slam origin in world frame

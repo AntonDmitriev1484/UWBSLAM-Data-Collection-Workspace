@@ -25,14 +25,16 @@ def set_axes_equal(ax):
 def draw_axes(ax, T, length=0.1):
     """Draw coordinate axes from transformation matrix T."""
     H = np.linalg.inv(T)
-    origin = H @ np.array([0,0,0,1]) * length
-    x_axis = H @ np.array([1,0,0,1]) * length
-    y_axis = H @ np.array([0,1,0,1]) * length
-    z_axis = H @ np.array([0,0,1,1]) * length
+    origin = (H @ np.array([0,0,0,1]))[:3]
+    x_axis = (H @ np.array([1,0,0,1]))[:3]
+    y_axis = (H @ np.array([0,1,0,1]))[:3]
+    z_axis = (H @ np.array([0,0,1,1]))[:3]
 
-    ax.quiver(*origin, *x_axis, color='r', length=length, normalize=False)
-    ax.quiver(*origin, *y_axis, color='g', length=length, normalize=False)
-    ax.quiver(*origin, *z_axis, color='b', length=length, normalize=False)
+    print(f"{origin=}")
+
+    ax.quiver(*origin, *(x_axis-origin) * length, color='r')
+    ax.quiver(*origin, *(y_axis-origin) * length, color='g')
+    ax.quiver(*origin, *(z_axis-origin) * length, color='b')
 
 # def plot_transform(ax, T, label, length=0.2):
 #     """Draw a coordinate frame using a 4x4 transformation matrix and label at +X tip."""
@@ -63,14 +65,16 @@ def main():
 
     for item in all_data:
         if item.get("type") == "slam_pose" and "T_body_world" in item:
-            T = np.array(item["T_body_world"])
+            T = np.array(item["T_body_world"]) # T_world_to_body
             transforms.append(T)
-            positions.append(T[:3, 3])
+            H = np.linalg.inv(T)
+            positions.append(H[:3, 3])
 
     positions = np.array(positions)
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
+
 
     ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], label='Trajectory', color='blue')
     ax.scatter(*positions[0], color='green', label='Start')

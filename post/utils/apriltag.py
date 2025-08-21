@@ -181,9 +181,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     ### Therefore frames 'cam1' and 'sbody' are analogous
     ### My body frame is defined as a rotation out of the IMU frame.
 
-    # Note: Python '@' operator associates a chain in reverse of how you would write it out in right multiplication
-    # T_a_to_b is the HTM that transforms a vector from frame A to frame B.
-
     T_tag_to_cam1 = np.eye(4)
     # The detection we use should always be the one with the highest decision margin
     # detection = sorted(best_match[0], key=lambda x: x.decision_margin, reverse= True)[0]
@@ -194,16 +191,18 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
         if d.decision_margin > best_margin:
             best_margin = d.decision_margin
             detection = d
+
     print(f"Using detection {detection=}")
 
-    T_tag_to_cam1[:3, :3] = detection.pose_R # Pose of tag in camera frame
+    T_tag_to_cam1[:3, :3] = detection.pose_R
     T_tag_to_cam1[:3, 3] = detection.pose_t.flatten()
+    # Position of tag relative to center of camera
+    # Rotation from camera to tag frame
 
     pose_slam = slam_quat_to_HTM(best_match[2])
-    T_sorigin_to_sbody = pose_slam # SLAM pose is the transform from the slam origin to slam body
+    T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
     # Note: 
     # The starting point of cam1 in space is the slam origin.
-
 
     DETECTED_ID = str(detection.tag_id)
 
@@ -213,7 +212,14 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_tag_to_world = np.eye(4)
     T_tag_to_world[:3, 3] = t_world_to_tag_in_world
     T_tag_to_world[:3,:3] = R_tag_to_world
-    
+
+    # Going to try hard coding for detection 2
+    # Doesn't fix anything
+    # t_tag_to_world_in_tag = np.array([-1.13, 1.635, -0.1175])
+    # T_world_to_tag = np.eye(4)
+    # T_world_to_tag[:3,:3] = mes[:3,:3]
+    # T_world_to_tag[:3, 3] = t_tag_to_world_in_tag
+
     T_world_to_tag = np.linalg.inv(T_tag_to_world)
     Transforms.T_world_to_tag = T_world_to_tag
 
@@ -221,19 +227,13 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     Transforms.origin = np.eye(4)
     
 
-    # How you would write it by hand (doesn't work)
-    # T_world_to_sorigin = np.linalg.inv(T_sorigin_to_sbody) @ np.linalg.inv(T_cam1_to_tag) @ T_world_to_tag
-    Transforms.T_world_to_body_detect = T_tag_to_cam1 @ T_world_to_tag
-    T_world_to_sorigin = np.linalg.inv(T_sorigin_to_sbody) @ Transforms.T_world_to_body_detect # Still something wrong with htis....
-    Transforms.T_world_to_sorigin_invslam = T_sorigin_to_sbody @ Transforms.T_world_to_body_detect # Still something wrong with htis....
-
-
-    Transforms.T_sorigin_to_sbody = T_sorigin_to_sbody # Just to debug relative to the origin
-    
-    # T_world_to_sorigin = T_world_to_tag @ np.linalg.inv(T_cam1_to_tag) @ np.linalg.inv(T_sorigin_to_sbody)
+    Transforms.T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
+    T_world_to_sorigin = T_sbody_to_sorigin @ Transforms.T_world_to_cam1_detect # Still something wrong with htis....
     Transforms.T_world_to_sorigin = T_world_to_sorigin
 
-
+    # Transforms.T_world_to_cam1_detect = np.linalg.inv(T_cam1_to_tag) @ T_world_to_tag
+    # T_world_to_sorigin = T_sbody_to_sorigin @ Transforms.T_world_to_cam1_detect # Still something wrong with htis....
+    # Transforms.T_world_to_sorigin = T_world_to_sorigin
 
 
     Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])

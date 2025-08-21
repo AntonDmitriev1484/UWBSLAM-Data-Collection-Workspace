@@ -220,14 +220,11 @@ if args.override_april_start is not None:
     print(f" Final rotation { Transforms.T_world_to_sorigin[:3, :3]}")
 
 # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
-def get_T_world_to_body(T_sorigin_to_sbody): # A function because I re-use this a lot
-    # T_world_to_body = (
-    #                 Transforms.T_world_to_sorigin 
-    #                 @ T_sorigin_to_sbody 
-    #                 @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-    #                 @ np.linalg.inv(Transforms.T_body_to_imu)
-    # )
-    T_world_to_body = np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_sbody)  @ T_sorigin_to_sbody @ Transforms.T_world_to_sorigin 
+def get_T_world_to_body(slam_pose): # A function because I re-use this a lot
+    T_cam1_to_sorigin = slam_pose
+    T_world_to_body = (np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+                    @ np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin)
+
     return T_world_to_body
 
 ### Write UWB data to its own csv file, and to all_data
@@ -257,8 +254,6 @@ slam_poses_slam_frame = [] # This is a list of T_sorigin_to_sbody
 slam_pose_counter = 0
 
 all_data_synthetic = [] # Keep interpolated points in a separate file from all.json\
-
-#
 
 
 dataset_slam_pose_frequency = 20 # Need something evenly divisible

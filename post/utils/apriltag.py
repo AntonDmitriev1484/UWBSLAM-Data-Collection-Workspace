@@ -213,13 +213,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     T_tag_to_world[:3, 3] = t_world_to_tag_in_world
     T_tag_to_world[:3,:3] = R_tag_to_world
 
-    # Going to try hard coding for detection 2
-    # Doesn't fix anything
-    # t_tag_to_world_in_tag = np.array([-1.13, 1.635, -0.1175])
-    # T_world_to_tag = np.eye(4)
-    # T_world_to_tag[:3,:3] = mes[:3,:3]
-    # T_world_to_tag[:3, 3] = t_tag_to_world_in_tag
-
     T_world_to_tag = np.linalg.inv(T_tag_to_world)
     Transforms.T_world_to_tag = T_world_to_tag
 
@@ -230,11 +223,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     Transforms.T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
     T_world_to_sorigin = T_sbody_to_sorigin @ Transforms.T_world_to_cam1_detect # Still something wrong with htis....
     Transforms.T_world_to_sorigin = T_world_to_sorigin
-
-    # Transforms.T_world_to_cam1_detect = np.linalg.inv(T_cam1_to_tag) @ T_world_to_tag
-    # T_world_to_sorigin = T_sbody_to_sorigin @ Transforms.T_world_to_cam1_detect # Still something wrong with htis....
-    # Transforms.T_world_to_sorigin = T_world_to_sorigin
-
 
     Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
     Transforms.T_imu_to_sbody = Transforms.T_imu_to_cam1
@@ -352,18 +340,20 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     for detection in best_match[0]:
 
         # This should be tag -> world frame, but we read world to tag
-        H_world_to_tag = np.array(apriltag_world_locations[str(detection.tag_id)])
-        # H_tag_to_world = np.linalg.inv(H_world_to_tag) 
-        # # You'd think you'd have to invert it? But I guess that's not the case...
-        # This gives the right matrix multiplication results in REPL?
-        # maybe just ask Jose
+
+        mes = np.array(apriltag_world_locations[str(detection.tag_id)])
+        R_tag_to_world = np.linalg.inv(mes[:3,:3])
+        T_tag_to_world = np.eye(4)
+        T_tag_to_world[:3, :3] = R_tag_to_world
+        T_tag_to_world[:3, 3] = mes[:3, 3] # t_world_to_tag_in_world
 
         print(str(detection.tag_id))
-        print(H_world_to_tag)
 
         for corner_tagframe, corner_imageframe in zip(corners_in_tag_frame, detection.corners):
-            
-            worldPoints.append(  (H_world_to_tag @ np.hstack([corner_tagframe, 1]))[:3]  ) # Append and then truncate a 1 from the vector
+
+            corner_world_frame = (T_tag_to_world @ np.hstack([corner_tagframe, 1]))[:3]
+            print(f"{corner_tagframe=} -> {corner_world_frame}")
+            worldPoints.append(  corner_world_frame  ) # Append and then truncate a 1 from the vector
             imagePoints.append(corner_imageframe)
 
     
@@ -415,24 +405,10 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     # plt.savefig("./april_tag_projection_plot.png", dpi=300)
     # plt.show()
 
-    H_cam1_to_tag = np.eye(4)
-    detection = best_match[0][0] # Pose of tag in camera frame
-    H_cam1_to_tag[:3, :3] = detection.pose_R
-    H_cam1_to_tag[:3, 3] = detection.pose_t.flatten()
-    DETECTED_ID = str(detection.tag_id)
-    print(f" Detected tag_id {DETECTED_ID}")
-    H_world_to_tag = np.array(apriltag_world_locations[DETECTED_ID]) # Get the world frame location of the center of the tag
-    # H_world_to_cam1 = inv(H_cam1_to_tag) @ H_world_to_tag
-    H_world_to_cam1_prior = H_world_to_tag @ np.linalg.inv(H_cam1_to_tag) # Use the AprilTag detection as a prior for Levenberg Marquardt in cv2.solvePnP
+    success, R_, t = cv2.solvePnP(worldPoints, imagePoints, CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC)
 
-    r_prior = np.ascontiguousarray(H_world_to_cam1_prior[:3, :3], dtype=np.float64)
-    t_prior = np.ascontiguousarray(H_world_to_cam1_prior[:3, 3].reshape(3, 1), dtype=np.float64)
-    rprior_rodriguez, _ = cv2.Rodrigues(r_prior)
-    success, r_world_to_cam1, t_world_to_cam1 = cv2.solvePnP(worldPoints, imagePoints, 
-                                                             CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC,
-                                                             rvec=rprior_rodriguez,
-                                                             tvec=t_prior,
-                                                             flags=cv2.SOLVEPNP_ITERATIVE)
+    # success, r_world_to_cam1, t_cam1_to_world = cv2.solvePnP(worldPoints, imagePoints, 
+    #                                                         CAM1_INTRINSICS_MAT, CAM1_DISTORTION_VEC)
     print("SolvePnP success? "+str(success))
 
     # I think this might actually be t_cam1_to_world lol
@@ -441,43 +417,33 @@ def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalib
     # I set my object frame to be the world frame, by first transforming all object points to the world frame.
 
  
-    print(r_world_to_cam1)
-    print(t_world_to_cam1)
-    R, _ = cv2.Rodrigues(r_world_to_cam1)
-    H_world_to_cam1 = np.eye(4)
-    H_world_to_cam1[:3,:3] = R.T # Source: https://github.com/elenagiraldo3/april_tags_autolocalization/blob/main/detect_apriltag.py#L40
-    H_world_to_cam1[:3,3] = np.matmul(-R.T, t_world_to_cam1.flatten()).reshape(3)
-    # H_world_to_cam1[:3,3] = t_world_to_cam1.flatten()
+    # print(r_world_to_cam1)
+    # print(t_cam1_to_world)
 
-    pose_slam = slam_quat_to_HTM(best_match[2])
-    H_sorigin_to_sbody = pose_slam
+    R, _ = cv2.Rodrigues(R_)
+    # T_world_to_cam1 = np.eye(4)
+    # T_world_to_cam1[:3, :3] = r_world_to_cam1
+    # T_world_to_cam1[:3, 3] = t_cam1_to_world.flatten()
 
 
-    H_cam1_to_sbody = np.linalg.inv(np.array(calibration['cam0']['T_cam_imu'])) # Calibration gives us transform from IMU to camera
+    # This is the same as just inverting the transform returned by extract PnP
+    T_world_to_cam1 = np.eye(4)
+    T_world_to_cam1[:3,:3] = R # Source: https://github.com/elenagiraldo3/april_tags_autolocalization/blob/main/detect_apriltag.py#L40
+    T_world_to_cam1[:3,3] = (-R.T @ t).reshape(3)
 
+    T_sbody_to_sorigin = slam_quat_to_HTM(best_match[2])
 
-    # H_world_to_sorigin = np.linalg.inv(H_sorigin_to_sbody) @ H_world_to_cam1
-    # Cam1 is slam body.
+    Transforms.T_world_to_cam1_detect = T_world_to_cam1
+    T_world_to_sorigin = T_sbody_to_sorigin @ Transforms.T_world_to_cam1_detect # Still something wrong with htis....
+    Transforms.T_world_to_sorigin = T_world_to_sorigin
 
-    H_world_to_sorigin = H_world_to_cam1 @ np.linalg.inv(H_sorigin_to_sbody)
+    Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
+    Transforms.T_imu_to_sbody = Transforms.T_imu_to_cam1
 
-    Transforms.T_slam_world = H_world_to_sorigin
+    Transforms.T_slam_world = T_world_to_sorigin 
+    # Transforms uses older notation T_slam_world, transform from world to slam origin, i.e. poes of slam origin in world frame
 
-
-    world_frame_dbg = SimpleNamespace()
-    origin = np.eye(4)
-    world_frame_dbg.origin = origin
-    world_frame_dbg.T_world_to_slam = H_world_to_sorigin
-    world_frame_dbg.T_world_to_cam1 = H_world_to_cam1
-    world_frame_dbg.T_world_to_cam1_prior = H_world_to_cam1_prior
-
-    world_frame_dbg.T_world_to_tag1 = np.array(apriltag_world_locations["1"])
-    world_frame_dbg.T_world_to_tag2 = np.array(apriltag_world_locations["2"])
-    world_frame_dbg.T_world_to_tag3 = np.array(apriltag_world_locations["3"])
-    world_frame_dbg.T_world_to_tag4 = np.array(apriltag_world_locations["4"])
     print(Transforms)
-
-    with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
     return Transforms
 

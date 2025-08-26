@@ -88,12 +88,15 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
 print(f" Processed {processed_uwb_message} / {uwb_message_count} total messages")
 
 # Filter for messages within bag timestamp range.
-START = reader.start_time * 1e-9
-END = reader.end_time * 1e-9
-print(f"ROS duration {START} - {END}")
-def filtt(arr): return list(filter(lambda x: (START <= x["t"] <= END), arr))
-def filtt2(arr): return list(filter(lambda x: (START <= x[0] <= END), arr))
+start = reader.start_time * 1e-9
+end = reader.end_time * 1e-9
+print(f"ROS duration {start} - {end}")
+def filtt(arr): return list(filter(lambda x: (start <= x["t"] <= end), arr))
+def filtt2(arr): return list(filter(lambda x: (start <= x[0] <= end), arr))
 
+start += 0
+end -= 60
+print(f"ROS duration middle {start} - {end}")
 
 Transforms = SimpleNamespace()
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
@@ -109,14 +112,15 @@ uwb_csv = []
 ranges_log = {}
 for j in topic_to_processing['/uwb_ranges'][1]:
     csv_row = []
-    for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
-    uwb_csv.append(csv_row)
-    all_data.append(j)
-    if j['id'] not in ranges_log: ranges_log[j['id']] = []
-    else: ranges_log[j['id']].append(j['range'])
+    for k, v in j.items():
+        csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
+    if start <= j["t"] <= end:
+        uwb_csv.append(csv_row)
+        all_data.append(j)
+        if j['id'] not in ranges_log: ranges_log[j['id']] = []
+        else: ranges_log[j['id']].append(j['range'])
 
 from scipy.stats import norm
-
 
 for anchor, uwb_range_distribution in ranges_log.items():
     # Fit a Gaussian to UWB range distribution

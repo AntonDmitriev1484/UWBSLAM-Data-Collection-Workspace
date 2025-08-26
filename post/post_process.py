@@ -222,9 +222,10 @@ if args.override_april_start is not None:
 # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
 def get_T_world_to_body(slam_pose): # A function because I re-use this a lot
     T_cam1_to_sorigin = slam_pose
-    T_world_to_body = (np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                    @ np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin)
-
+    # T_world_to_body = (np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_sbody) 
+    #                 @ np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin)
+    T_world_to_body = (np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin)
+    # Note: One of the last two is adding a wrong rotation into the mix.
     return T_world_to_body
 
 ### Write UWB data to its own csv file, and to all_data

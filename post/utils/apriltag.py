@@ -149,23 +149,84 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # First pick 20 candidates with the highest decision margin (higher is better)
     # x[0][0] because x[0] is an array of multiple detections
-    best_detections =  (list(sorted(all_detections, key=lambda x: x[0][0].decision_margin, reverse=True)))[:20]
 
-    # Then of those, pick the detections with the lowest delay
+    def metric(x):
+        for detect in x[0]:
+            dm = detect.decision_margin
+            d = np.linalg.norm(detect.pose_t)
+            if d > 0.7: 
+                return 0
+            else: return dm
+    best_detections =  (list(sorted(all_detections, key=metric , reverse=True)))[:20]
+
+    # Compute the timestamp and pose mapping of all timestamps with perfect sync.
+    # timestamp_to_detection_pose_prior = {}
+    # for (detections, frame) in best_detections:
+
+    #     # Compute the pose in the world frame:
+    #         T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
+    #         T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
+
+    #         # Position of tag relative to center of camera
+    #         # Rotation from camera to tag frame
+
+    #         pose_slam = slam_quat_to_HTM(best_match[2])
+    #         T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
+    #         # Note: 
+    #         # The starting point of cam1 in space is the slam origin.
+
+    #         DETECTED_ID = str(detection.tag_id)
+
+    #         mes = np.array(apriltag_world_locations[DETECTED_ID])
+    #         R_tag_to_world = np.linalg.inv(mes[:3,:3])
+    #         t_world_to_tag_in_world = mes[:3,3]
+    #         T_tag_to_world = np.eye(4)
+    #         T_tag_to_world[:3, 3] = t_world_to_tag_in_world
+    #         T_tag_to_world[:3,:3] = R_tag_to_world
+
+    #         T_world_to_tag = np.linalg.inv(T_tag_to_world)
+    #         Transforms.T_world_to_tag = T_world_to_tag
+
+
+    #         Transforms.origin = np.eye(4)
+            
+
+    #         Transforms.T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
+
+
+    #     timestamp_to_detection_pose_prior[frame["t"]]
+
+
+    # Then of those, pick the detections with the lowest delay and maximum decision margin
     lowest_match_delay = 10000
     best_match = None # (detections obj, associated frame, associated pose)
-    for (detections, frame) in best_detections:
 
+    lowest_match_delay = float("inf")
+    best_match = None
+
+    for (detections, frame) in best_detections:
         frame_t = frame["t"]
-        closest_slam_pose_index = np.argmin(np.abs(slam_data[:,0] - frame_t))
+        closest_slam_pose_index = np.argmin(np.abs(slam_data[:, 0] - frame_t))
         slam_pose = slam_data[closest_slam_pose_index, :]
         slam_t = slam_pose[0]
 
         match_delay = abs(slam_t - frame_t)
-        if (match_delay < lowest_match_delay):
-            lowest_match_delay = match_delay
-            best_match = (detections, frame, slam_pose)
 
+        # decision margin of first detection (or max across detections if you prefer)
+        dm = max(d.decision_margin for d in detections)
+
+        if (match_delay < lowest_match_delay):
+            # strictly better delay
+            lowest_match_delay = match_delay
+            best_match = (detections, frame, slam_pose, dm)
+        elif abs(match_delay - lowest_match_delay) <= 1e-5:
+            # tie in delay -> break with decision margin
+            if best_match is None or dm > best_match[3]:
+                best_match = (detections, frame, slam_pose, dm)
+
+        # unpack best_match without dm
+        if best_match:
+            detections, frame, slam_pose, dm = best_match
 
     
     print(f"Best match \n {best_match=}")
@@ -194,8 +255,9 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     print(f"Using detection {detection=}")
 
-    T_tag_to_cam1[:3, :3] = detection.pose_R
-    T_tag_to_cam1[:3, 3] = detection.pose_t.flatten()
+    T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
+    T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
+
     # Position of tag relative to center of camera
     # Rotation from camera to tag frame
 

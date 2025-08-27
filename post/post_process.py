@@ -155,7 +155,7 @@ Transforms.T_body_to_decawave = np.eye(4)
 Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1]) * -1 # -1 for being in decawave frame
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
-Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+Transforms, timestamp_to_detection_pose = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 # Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
 with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
@@ -280,6 +280,9 @@ print(f"{n_points=} {n_skip=} {n_slam_skip=}")
 
 if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.interpolate_slam=} .")
 
+print(f"{timestamp_to_detection_pose=}")
+print(f"Tag corrections {len(timestamp_to_detection_pose.keys())}")
+
 for i in range(slam_data.shape[0]-1):
 
     T_sorigin_to_sbody = slam_quat_to_HTM(slam_data[i,:])
@@ -294,7 +297,8 @@ for i in range(slam_data.shape[0]-1):
         "t": slam_data[i,0],
         "type": "slam_pose",
         "T_body_slam" : T_sorigin_to_sbody,
-        "T_body_world" : T_world_to_body
+        "T_body_world" : T_world_to_body,
+        "April_T_body_world" : timestamp_to_detection_pose.get(slam_data[i, 0]) # Defaults to null
     }
     all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
     slam_pose_counter += 1

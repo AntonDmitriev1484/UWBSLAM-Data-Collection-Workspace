@@ -151,50 +151,61 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # x[0][0] because x[0] is an array of multiple detections
 
     def metric(x):
+        sdm = 0 # Detections scored by sum of decision margin
         for detect in x[0]:
-            dm = detect.decision_margin
+            sdm += detect.decision_margin
             d = np.linalg.norm(detect.pose_t)
             if d > 0.7: 
                 return 0
-            else: return dm
-    best_detections =  (list(sorted(all_detections, key=metric , reverse=True)))[:20]
+        return sdm
+    # best_detections =  (list(sorted(all_detections, key=metric , reverse=True)))[:20]
+    n_candidates = 150
+    # all_detections gets created by timestamp, 
+    # we need something that samples like 50 detections per tag.
+    best_detections =  (list(sorted(all_detections, key=metric , reverse=True)))[:150]    
+    avg_detection = np.average(np.array([ ds[0].decision_margin for ds, _ in best_detections]))
+
+    print(f" {n_candidates} candidates, with average detection threshold of {avg_detection}")
+    with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
     # Compute the timestamp and pose mapping of all timestamps with perfect sync.
-    # timestamp_to_detection_pose_prior = {}
-    # for (detections, frame) in best_detections:
+    timestamp_to_detection_pose_prior = {} # Map timestamp, to list of apriltag poses at that timestamp.
 
-    #     # Compute the pose in the world frame:
-    #         T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
-    #         T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
+    for (detections, frame) in best_detections:
+        frame_t = frame["t"]
+        closest_slam_pose_index = np.argmin(np.abs(slam_data[:, 0] - frame_t))
+        slam_pose = slam_data[closest_slam_pose_index, :]
+        slam_t = slam_pose[0]
+        match_delay = abs(slam_t - frame_t)
 
-    #         # Position of tag relative to center of camera
-    #         # Rotation from camera to tag frame
+        for detection in detections:
+            print(detection.tag_id)
 
-    #         pose_slam = slam_quat_to_HTM(best_match[2])
-    #         T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
-    #         # Note: 
-    #         # The starting point of cam1 in space is the slam origin.
+        if match_delay < 1e-3:
+            for detection in detections: # Some detections may yield multiple april poses.
 
-    #         DETECTED_ID = str(detection.tag_id)
+                T_tag_to_cam1 = np.eye(4)
+                T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
+                T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
+                pose_slam = slam_quat_to_HTM(slam_pose)
+                T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
 
-    #         mes = np.array(apriltag_world_locations[DETECTED_ID])
-    #         R_tag_to_world = np.linalg.inv(mes[:3,:3])
-    #         t_world_to_tag_in_world = mes[:3,3]
-    #         T_tag_to_world = np.eye(4)
-    #         T_tag_to_world[:3, 3] = t_world_to_tag_in_world
-    #         T_tag_to_world[:3,:3] = R_tag_to_world
+                DETECTED_ID = str(detection.tag_id)
 
-    #         T_world_to_tag = np.linalg.inv(T_tag_to_world)
-    #         Transforms.T_world_to_tag = T_world_to_tag
+                mes = np.array(apriltag_world_locations[DETECTED_ID])
+                R_tag_to_world = np.linalg.inv(mes[:3,:3])
+                t_world_to_tag_in_world = mes[:3,3]
+                T_tag_to_world = np.eye(4)
+                T_tag_to_world[:3, 3] = t_world_to_tag_in_world
+                T_tag_to_world[:3,:3] = R_tag_to_world
+                T_world_to_tag = np.linalg.inv(T_tag_to_world)
 
+                T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
 
-    #         Transforms.origin = np.eye(4)
-            
-
-    #         Transforms.T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
-
-
-    #     timestamp_to_detection_pose_prior[frame["t"]]
+                if slam_t in timestamp_to_detection_pose_prior.keys():
+                    timestamp_to_detection_pose_prior[slam_t].append(T_world_to_cam1_detect)
+                else:
+                    timestamp_to_detection_pose_prior[slam_t] = [T_world_to_cam1_detect]
 
 
     # Then of those, pick the detections with the lowest delay and maximum decision margin
@@ -235,8 +246,6 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     for match in best_match[0]:
         print(match)
         draw_detection(best_match[1], match, detect_dbg_path, CAM1_INTRINSICS)
-
-    with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
     ### ORBSLAM3 outputs the pose of the left camera over time.
     ### Therefore frames 'cam1' and 'sbody' are analogous
@@ -296,7 +305,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
-    return Transforms
+    return Transforms, timestamp_to_detection_pose_prior
 
 def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
 

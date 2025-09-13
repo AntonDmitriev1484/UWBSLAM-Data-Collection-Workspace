@@ -155,13 +155,14 @@ def aggregate_tracker(trackbody_to_mybody_func, tracker_data_tum):
 
     return tracker_body_poses, tracker_body_velocities
 
-def aggregate_assisted_uwb(uwb_json, tracker_body_poses, N_POINTS):
+def aggregate_assisted_uwb(uwb_json, trackbody_to_mybody_func, tracker_cam1_poses, N_POINTS):
     assisted_uwb_json = []
     N_POINTS = 100
 
     # Still using 'vicon' syntax but thats ok who cares
-
-    vwf = tracker_body_poses # 'vicon world frame' instead of 'slam world frame'
+    # Must interpolate in original frame, then apply your transform
+    
+    vwf = tracker_cam1_poses # 'vicon world frame' instead of 'slam world frame'
     
     for u in uwb_json:
         # Find the closest timestamp vicon measurements to our UWB range
@@ -178,11 +179,13 @@ def aggregate_assisted_uwb(uwb_json, tracker_body_poses, N_POINTS):
             start_pose, vwf[istart, 0],
             end_pose, vwf[iend, 0],
             u["t"], N_POINTS
-        ) # Interpolated pose is a T_world_to_vbody
+        ) # Interpolated pose is a T_world_to_cam1
+
+        interp_pose_world = trackbody_to_mybody_func(interp_pose)
 
         u2 = copy.deepcopy(u)
         u2["type"] = "assisted_uwb"
-        u2["T_body_world"] = interp_pose
+        u2["T_body_world"] = interp_pose_world
         assisted_uwb_json.append(u2)
 
     return assisted_uwb_json

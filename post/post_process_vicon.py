@@ -23,7 +23,7 @@ from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
 from utils.apriltag import *
 from utils.math_utils import *
-from post.utils.vicon_utils import *
+from utils.vicon_utils import *
 
 
 import matplotlib.pyplot as plt
@@ -47,9 +47,7 @@ parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
 parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
-parser.add_argument("--real_uwb_orientation_support", default=True, type=bool)
-parser.add_argument("--override_april_start", type=str )
-
+parser.add_argument("--real_uwb_orientation_support", default=False, type=bool)
 
 args = parser.parse_args()
 
@@ -78,8 +76,7 @@ in_anchors = f"../world/{args.anchors_file}"
 
 bagpath = Path(f'../collect/ros2/{args.trial_name}')
 
-vicon_data = parse_vicon(in_vicon) # TODO: Write a parsing function for the vicon files
-
+vicon_data = parse_vicon_csv(in_vicon) # TODO: Write a parsing function for the vicon files
 
 # headset_data contains the pose of the marker I had on the decawave antenna in the world frame.
 
@@ -133,12 +130,13 @@ END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
-vicon_data = crop_vicon(vicon_data, START, END)
-mobile_objects = ["LeftRS", "UWB1"]
-vicon_data = clean_vicon(vicon_data, mobile_objects)
+vicon_data = crop_vicon(vicon_data, START, END) # TODO: Make sure vicon_data is mutated here?
 
-headset_data = vicon_data["LeftRS"]
-print(f" Vicon frequency { headset_data.shape[0] / (END-START)}")
+mobile_objects = ["LeftRS", "UWB1"]
+vicon_data = clean_vicon(vicon_data, mobile_objects) # And here also?
+
+cam1_vicon_data = vicon_data["LeftRS"]
+print(f" Vicon frequency { len(cam1_vicon_data) / (END-START)}")
 
 # Need to adjust vicon data to actual timestamps instead of just frame indices
 
@@ -180,6 +178,9 @@ Transforms.T_body_to_imu = np.array([
                                         [0, 0, 0, 1]
                                     ])
 
+with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
+Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
+Transforms.T_cam1_to_body = np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_cam1)
 Transforms.T_body_to_decawave = np.eye(4)
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
@@ -387,13 +388,13 @@ if not args.no_orbslam:
             istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
 
             # Need to get an HTM, but don't need to convert to body in world frame, because we're already in the body frame.
-            start_pose = slam_quat_to_HTM(headset_data[istart, :])
-            end_pose = slam_quat_to_HTM(headset_data[iend, :])
+            start_pose = slam_quat_to_HTM(cam1_vicon_data[istart, :])
+            end_pose = slam_quat_to_HTM(cam1_vicon_data[iend, :])
 
 
             # Now interpolate between these two poses
-            interp_interval = [headset_data[istart,0], headset_data[iend, 0]]
-            interp_timestamps = np.linspace(headset_data[istart,0], headset_data[iend, 0], N_POINTS)
+            interp_interval = [cam1_vicon_data[istart,0], cam1_vicon_data[iend, 0]]
+            interp_timestamps = np.linspace(cam1_vicon_data[istart,0], cam1_vicon_data[iend, 0], N_POINTS)
 
             # Use Slerp to interpolate on SO(3) rotations
             interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
@@ -566,7 +567,7 @@ else: # No ORBSLAM available
 
     def vicon_tracked_body_to_my_body(T_world_to_vcam1):
         return Transforms.T_cam1_to_body * T_world_to_vcam1
-    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, headset_data)
+    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(cam1_vicon_data))
     
     # Convert from nparray to json format
     # Add Vicon poses to all_data
@@ -584,12 +585,17 @@ else: # No ORBSLAM available
     # If we're using real UWB ranges, but have no compass
     # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
     assisted_uwb_json = []
-    if (args.real_uwb_orientation_support):
-        assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_body_poses, 100)
+    #TODO: Bugged
+    # print(args.real_uwb_orientation_support)
+    # if args.real_uwb_orientation_support:
+    #     cam1_vicon_data_htm = []
+    #     for i in range(len(cam1_vicon_data)-1):
+    #         cam1_vicon_data_htm.append(slam_quat_to_HTM(cam1_vicon_data[i]))
+    #     assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(cam1_vicon_data_htm), 100)
     
 
-    def vicon_tracked_uwb1_to_uwb1_tx(T_world_to_vuwb1): Transforms.T_vuwb_to_uwbtx @ T_world_to_vuwb1
-    vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, vicon_data["UWB1"])
+    def vicon_tracked_uwb1_to_uwb1_tx(T_world_to_vuwb1): return Transforms.T_vuwb_to_uwbtx @ T_world_to_vuwb1
+    vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
     
     # Knowing the decawave in world frame, and my body in world frame
     # I can compute the translation from body to decawave in the body frame.
@@ -597,8 +603,8 @@ else: # No ORBSLAM available
     Transforms.T_body_to_decawave = np.eye(4)
     translations = [] # Translation from body origin to tx
     for i in range(vicon_tx_poses.shape[0]-1):
-        T_world_to_tx = vicon_tx_poses[i, :].reshape((4,4))
-        T_world_to_vbody = vicon_body_poses[i, :].reshape((4,4))
+        T_world_to_tx = vicon_tx_poses[i, 1:].reshape((4,4))
+        T_world_to_vbody = vicon_body_poses[i, 1:].reshape((4,4))
         T_body_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
         translations.append(T_body_to_tx[:3,3])
     Transforms.T_body_to_decawave = np.average(np.array(translations), axis=1)
@@ -615,9 +621,10 @@ else: # No ORBSLAM available
     # TODO: Compose the final synthetic dataset
 
 
-    vicon_body_poses_tum = [ HTM_to_TUM(pose) for pose in vicon_body_poses]
-    with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
-    with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
+    # TODO: Bugged Edit and comment back in later My brain is fucking fried
+    # vicon_body_poses_tum = [ HTM_to_TUM(pose) for pose in vicon_body_poses]
+    # with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
+    # with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
 
     class NumpyEncoder(json.JSONEncoder):
         def default(self, obj):
@@ -632,7 +639,7 @@ else: # No ORBSLAM available
     # Use Vicon information to compute the world frame for our tags and anchors
     world_frame_anchors = []
     world_frame_tags = {}
-    for tracked_name, data in vicon_data:
+    for tracked_name, data in vicon_data.items():
         if "UWB" in tracked_name:
             # Compute the tx point over all poses, then average them.
             uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
@@ -661,14 +668,17 @@ else: # No ORBSLAM available
     # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
     print("Checking frequency of real data")
     print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-    print(f" Measured vicon frequency {headset_data.shape[0] / (END-START)}")
+    print(f" Measured vicon frequency {len(cam1_vicon_data) / (END-START)}")
 
+    print(all_data[:10]) #TODO: BUgged, something is very wrong with all_data, it seems to contain both jsons and raw float values for some reason.
+    
     # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
     all_data = filtt(all_data)
+
     all_data = sorted(all_data, key=lambda x: x["t"])
     json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
 
-    # All data syntehtic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
+    # All data synthetic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
     all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
     all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
 

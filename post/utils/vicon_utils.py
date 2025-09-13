@@ -4,7 +4,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
 
-from math_utils import * 
+from utils.math_utils import * 
 
 def euler_to_tum(arr, degrees=True):
     """
@@ -67,7 +67,7 @@ def parse_vicon_csv(file, subject_filter=None):
     with open(file, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            t = float(row["timestamp"])
+            t = float(row["timestamp"]) / 1e3 # Convert from ms to s
             subj = row["subject"]
 
             tx = float(row["x"]) / 1000.0  # mm → m
@@ -96,23 +96,36 @@ def parse_vicon_csv(file, subject_filter=None):
 def crop_vicon(vicon_data, start, end):
 
     for tracked_name, data in vicon_data.items():
-        data = [ d for d in data if start < d[0] and d[0] < end ]
-        # vicon_data[tracked_name] = data
+        data = [ d for d in data if start < d[0] and d[0] < end ] # Doesn't mutate vicon data
+        vicon_data[tracked_name] = data # this does
+    return vicon_data
 
-# Mutates vicon_data
 def clean_vicon(vicon_data, mobile):
 
     # If you're mobile and translation suddenly drop to 0, that means tracking was lost. interpolate that thang
 
     for tracked_name, data in vicon_data.items():
         if tracked_name in mobile:
+
+            # In case we start off at a 0 pose, find the first non-zero pose
+            # and set that to be our start pose
+            start_pose = None
+            for i in range(0, len(data)):
+                if np.linalg.norm(np.array(data[i])[1:4]) != 0: 
+                    start_pose = np.array(data[i]) # Next valid TUM timestamped pose
+                    break
+            for p in range(0,i):
+                data[p] = start_pose
+
+            # Now clean
             for i in range(1, len(data)):
                 if np.linalg.norm(np.array(data[i])[1:4]) == 0: 
 
                     last_pose = np.array(data[i-1]) # Last valid TUM timestamped pose
                     next_pose = None
                     for j in range(i, len(data)): # Find next valid TUM timestamped pose
-                        if np.linalg.norm(np.array(data[i])[1:4]) != 0: 
+                        # print(data)
+                        if np.linalg.norm(np.array(data[j])[1:4]) != 0: 
                             next_pose = np.array(data[j]) # Next valid TUM timestamped pose
                             break
 
@@ -127,13 +140,14 @@ def clean_vicon(vicon_data, mobile):
 
                     data[i] = np.insert(interp_pose, 0, current_timestamp) #I'm pretty sure this mutates the original array?
 
-        # vicon_data[tracked_name] = data
+        vicon_data[tracked_name] = data
+    return vicon_data
 
 def get_tx_position(T_vuwb_to_uwbtx, data):
     positions = []
     for pose in data:
-        T_world_to_vuwb = slam_quat_to_HTM(pose)
-        T_world_to_tx = T_vuwb_to_uwbtx @ T_world_to_vuwb
-        if np.linalg.norm(T_world_to_vuwb[1:4]) != 0: # Filter out lost tracking outliers
+        if np.linalg.norm(np.array(pose)[1:4]) != 0: # Filter out lost tracking outliers
+            T_world_to_vuwb = slam_quat_to_HTM(pose)
+            T_world_to_tx = T_vuwb_to_uwbtx @ T_world_to_vuwb
             positions.append(np.linalg.inv(T_world_to_tx)[:3,3])
     return np.average(np.array(positions), axis=1)

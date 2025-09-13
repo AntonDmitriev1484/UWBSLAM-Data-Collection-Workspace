@@ -19,4 +19,4 @@ ros2 run beluga beluga \
   --param ranges_name:=uwb_ranges \
   --param exchange_name:=uwb_exchanges \
   --param port:=$ACM_PORT \
-  --param config:=./config.json
+  --param config:=./config1.json

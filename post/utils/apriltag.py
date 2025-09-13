@@ -16,6 +16,7 @@ import argparse
 import cv2
 import numpy as np
 import yaml
+import random
 
 import csv
 import matplotlib
@@ -140,72 +141,80 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     print(f"Read intrinsics {CAM1_INTRINSICS}")
 
     # Make a list of all detected apriltags in the motion.
-    all_detections = [] # (detections obj, associated_frame)
+    all_detections = {} # (detections obj, associated_frame)
 
     for frame in infra1_raw_frames:
-        detections_ = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
-        if len(detections_) > 0:
-            all_detections.append((detections_, frame))
+        detection = at_detector.detect(frame["raw"], TAG_POSE, CAM1_INTRINSICS, TAG_SIZE)
 
-    # First pick 20 candidates with the highest decision margin (higher is better)
-    # x[0][0] because x[0] is an array of multiple detections
+        for detection in detection:
+            if detection.tag_id in all_detections.keys():
+                all_detections[detection.tag_id].append((detection, frame))
+            else:
+                all_detections[detection.tag_id] = [(detection, frame)]
 
     def metric(x):
-        sdm = 0 # Detections scored by sum of decision margin
-        for detect in x[0]:
-            sdm += detect.decision_margin
-            d = np.linalg.norm(detect.pose_t)
-            if d > 0.7: 
-                return 0
+        detect, frame = x
+        sdm = detect.decision_margin
+        d = np.linalg.norm(detect.pose_t)
+        if d > 0.7: return 0
         return sdm
-    # best_detections =  (list(sorted(all_detections, key=metric , reverse=True)))[:20]
-    n_candidates = 150
-    # all_detections gets created by timestamp, 
-    # we need something that samples like 50 detections per tag.
-    best_detections =  (list(sorted(all_detections, key=metric , reverse=True)))[:150]    
-    avg_detection = np.average(np.array([ ds[0].decision_margin for ds, _ in best_detections]))
+    
+    n_candidates = 50  # max N candidates per tag 
 
-    print(f" {n_candidates} candidates, with average detection threshold of {avg_detection}")
+    best_detections = []
+    for id, dfs in all_detections.items():
+        # Each element in dfs is a (detection, frame) tuple
+        print(f" Tag {id}, starting number of detections, {len(all_detections[id])}")
+        best_tag_detections = (list(sorted(all_detections[id], key=metric , reverse=True)))[:50]
+        # print(best_tag_detections)
+        avg_detection = np.average(np.array([ d.decision_margin for d, _ in best_tag_detections]))
+        print(f" Tag {id}, satisfactory detections: {len(best_tag_detections)}, , with average detection threshold of {avg_detection}") 
+
+        # Filter out all tag decision margins under 55
+        best_tag_detections = [(d,f) for d, f in best_tag_detections if d.decision_margin > 55]
+        best_detections += best_tag_detections
+
+        
+        print(f" Tag {id}, {len(best_tag_detections)} final candidates")
+    
+    random.shuffle(best_detections)
+
     with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
 
     # Compute the timestamp and pose mapping of all timestamps with perfect sync.
     timestamp_to_detection_pose_prior = {} # Map timestamp, to list of apriltag poses at that timestamp.
 
-    for (detections, frame) in best_detections:
+    for (detection, frame) in best_detections:
         frame_t = frame["t"]
         closest_slam_pose_index = np.argmin(np.abs(slam_data[:, 0] - frame_t))
         slam_pose = slam_data[closest_slam_pose_index, :]
         slam_t = slam_pose[0]
         match_delay = abs(slam_t - frame_t)
 
-        for detection in detections:
-            print(detection.tag_id)
-
         if match_delay < 1e-3:
-            for detection in detections: # Some detections may yield multiple april poses.
+                
+            T_tag_to_cam1 = np.eye(4)
+            T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
+            T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
+            pose_slam = slam_quat_to_HTM(slam_pose)
+            T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
 
-                T_tag_to_cam1 = np.eye(4)
-                T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
-                T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
-                pose_slam = slam_quat_to_HTM(slam_pose)
-                T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
+            DETECTED_ID = str(detection.tag_id)
 
-                DETECTED_ID = str(detection.tag_id)
+            mes = np.array(apriltag_world_locations[DETECTED_ID])
+            R_tag_to_world = np.linalg.inv(mes[:3,:3])
+            t_world_to_tag_in_world = mes[:3,3]
+            T_tag_to_world = np.eye(4)
+            T_tag_to_world[:3, 3] = t_world_to_tag_in_world
+            T_tag_to_world[:3,:3] = R_tag_to_world
+            T_world_to_tag = np.linalg.inv(T_tag_to_world)
 
-                mes = np.array(apriltag_world_locations[DETECTED_ID])
-                R_tag_to_world = np.linalg.inv(mes[:3,:3])
-                t_world_to_tag_in_world = mes[:3,3]
-                T_tag_to_world = np.eye(4)
-                T_tag_to_world[:3, 3] = t_world_to_tag_in_world
-                T_tag_to_world[:3,:3] = R_tag_to_world
-                T_world_to_tag = np.linalg.inv(T_tag_to_world)
+            T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
 
-                T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
-
-                if slam_t in timestamp_to_detection_pose_prior.keys():
-                    timestamp_to_detection_pose_prior[slam_t].append(T_world_to_cam1_detect)
-                else:
-                    timestamp_to_detection_pose_prior[slam_t] = [T_world_to_cam1_detect]
+            if slam_t in timestamp_to_detection_pose_prior.keys():
+                timestamp_to_detection_pose_prior[slam_t].append(T_world_to_cam1_detect)
+            else:
+                timestamp_to_detection_pose_prior[slam_t] = [T_world_to_cam1_detect]
 
 
     # Then of those, pick the detections with the lowest delay and maximum decision margin
@@ -215,7 +224,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     lowest_match_delay = float("inf")
     best_match = None
 
-    for (detections, frame) in best_detections:
+    for (detection, frame) in best_detections:
         frame_t = frame["t"]
         closest_slam_pose_index = np.argmin(np.abs(slam_data[:, 0] - frame_t))
         slam_pose = slam_data[closest_slam_pose_index, :]
@@ -224,28 +233,26 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
         match_delay = abs(slam_t - frame_t)
 
         # decision margin of first detection (or max across detections if you prefer)
-        dm = max(d.decision_margin for d in detections)
+        dm = detection.decision_margin
 
         if (match_delay < lowest_match_delay):
             # strictly better delay
             lowest_match_delay = match_delay
-            best_match = (detections, frame, slam_pose, dm)
+            best_match = (detection, frame, slam_pose, dm)
         elif abs(match_delay - lowest_match_delay) <= 1e-5:
             # tie in delay -> break with decision margin
             if best_match is None or dm > best_match[3]:
-                best_match = (detections, frame, slam_pose, dm)
+                best_match = (detection, frame, slam_pose, dm)
 
         # unpack best_match without dm
         if best_match:
-            detections, frame, slam_pose, dm = best_match
+            detection, frame, slam_pose, dm = best_match
 
-    
+    best_match = (detection, frame, slam_pose)
+    draw_detection(frame, detection, detect_dbg_path, CAM1_INTRINSICS)
+
     print(f"Best match \n {best_match=}")
     print(f"Time delay of {lowest_match_delay}s")
-
-    for match in best_match[0]:
-        print(match)
-        draw_detection(best_match[1], match, detect_dbg_path, CAM1_INTRINSICS)
 
     ### ORBSLAM3 outputs the pose of the left camera over time.
     ### Therefore frames 'cam1' and 'sbody' are analogous
@@ -255,12 +262,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     # The detection we use should always be the one with the highest decision margin
     # detection = sorted(best_match[0], key=lambda x: x.decision_margin, reverse= True)[0]
 
-    detection = None # Find best tag detection within our selected detection
-    best_margin = 0
-    for d in best_match[0]:
-        if d.decision_margin > best_margin:
-            best_margin = d.decision_margin
-            detection = d
+    detection = best_match[0] # Find best tag detection within our selected detection
 
     print(f"Using detection {detection=}")
 

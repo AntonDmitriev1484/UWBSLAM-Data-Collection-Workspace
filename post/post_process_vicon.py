@@ -23,7 +23,7 @@ from utils.load_rostypes import *
 from utils.ros_msg_handlers import *
 from utils.apriltag import *
 from utils.math_utils import *
-from utils.vicon_parser import *
+from post.utils.vicon_utils import *
 
 
 import matplotlib.pyplot as plt
@@ -78,7 +78,9 @@ in_anchors = f"../world/{args.anchors_file}"
 
 bagpath = Path(f'../collect/ros2/{args.trial_name}')
 
-headset_data, anchor_data = parse_vicon(in_vicon) # TODO: Write a parsing function for the vicon files
+vicon_data = parse_vicon(in_vicon) # TODO: Write a parsing function for the vicon files
+
+
 # headset_data contains the pose of the marker I had on the decawave antenna in the world frame.
 
 
@@ -131,9 +133,13 @@ END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
+vicon_data = crop_vicon(vicon_data, START, END)
+mobile_objects = ["LeftRS", "UWB1"]
+vicon_data = clean_vicon(vicon_data, mobile_objects)
+
+headset_data = vicon_data["LeftRS"]
 print(f" Vicon frequency { headset_data.shape[0] / (END-START)}")
-f_vicon = 100
-headset_data = adjust_vicon_timestamps(headset_data, START, END, f_vicon)
+
 # Need to adjust vicon data to actual timestamps instead of just frame indices
 
 def filtt(arr): # For filtering a json output
@@ -148,20 +154,25 @@ def filtt2(arr): # For filtering a CSV output
 Transforms = SimpleNamespace()
 
 # Transform from vicon marker on helmet, to center of RS camera (body frame)
-Transforms.T_vmark_to_body = np.array([])
+
+# Vicon coordinate frames are marked with a 'v'
+# In reality 
+Transforms.T_vuwb1_to_vcam1 = np.array([])
 
 #Transform from vicon marker on anchor, to the center of the DW1000 UWB chip
-Transforms.T_vmark_to_anchor = np.array([])
+Transforms.T_vuwb_to_uwbtx = np.eye(4) # Probably better to express as a vector in the vUWB frame
+Transforms.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
 #Transform from vicon marker to the center of an Apriltag
-Transforms.T_vmark_to_tag = np.array([])
-
-T_world_to_anchormarker = np.eye(4)
-T_world_to_anchormarker[:3, 3] = anchor_data[0, 1:4]
-Transforms.T_world_to_anchor = T_world_to_anchormarker
+# I manually selected the center of the apriltag to define the vicon frame
+# Assuming Vicon provides the world -> item transform. But should double check this.
+Transforms.T_world_to_april = slam_quat_to_HTM(vicon_data["April7"][0])
 
 # Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
 
+# The SLAM tracked body is the left camera.
+# Is my body frame defined as the IMU?
+# My body frame is Z-up, x forward?
 Transforms.T_body_to_imu = np.array([
                                         [1, 0, 0, 0],
                                         [0, 0, 1, 0],
@@ -171,7 +182,17 @@ Transforms.T_body_to_imu = np.array([
 
 Transforms.T_body_to_decawave = np.eye(4)
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
-Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
+# Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
+
+# So we're going to have two body frame representations in the end.
+# T_world_to_sbody , that is slam and apriltag body frame estimate
+# T_world_to_vbody, that is what vicon reports.
+
+
+
+# Compute T_body_to_decawave by  Body_to_decawave = (Body_in_world_^-1 * Tx_in_world
+# Or just subtract the translation of body and UWBTX in world, and set the rotation to be 0.
+# But body in world needs to be computed from LeftRS in world, because my body frame is at the IMU?
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 
@@ -275,17 +296,17 @@ if not args.no_orbslam:
         if n_skip > 0 and (slam_pose_counter % n_skip == 0) and n_points > 0:
             # All in the slam frame first
             current_timestamp = slam_data[i, 0]
-            current_pose = T_sorigin_to_sbody
-            next_pose = slam_quat_to_HTM(slam_data[i+1,:])
+            start_pose = T_sorigin_to_sbody
+            end_pose = slam_quat_to_HTM(slam_data[i+1,:])
 
-            dTranslation = (next_pose[:3,3] - current_pose[:3,3]) / (n_points+1)
+            dTranslation = (end_pose[:3,3] - start_pose[:3,3]) / (n_points+1)
             dt = (slam_data[i+1,0] - slam_data[i, 0]) / (n_points+1)
 
-            Rotato = next_pose[:3, :3]
+            Rotato = end_pose[:3, :3]
 
             # Use Slerp to interpolate on SE(3) rotations
             interp_interval = [slam_data[i,0], slam_data[i+1, 0]]
-            interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+            interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
             slurpy = Slerp(interp_interval, interp_rots)
             interp_timestamps = np.linspace(slam_data[i,0], slam_data[i+1, 0], n_points)
             interpolated_rotations = slurpy(interp_timestamps)
@@ -294,7 +315,7 @@ if not args.no_orbslam:
             for p in range(1, n_points+1): # I think theres also a SCIPY function to do this cleaner, like SLERP but for XYZ.
 
                 interp_slam_pose = np.eye(4)
-                interp_slam_pose[:3, 3] = current_pose[:3, 3] + (dTranslation * p)
+                interp_slam_pose[:3, 3] = start_pose[:3, 3] + (dTranslation * p)
                 # interp_slam_pose[:3, :3] = Rotation
                 interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix() # T_sorigin_to_sbody
 
@@ -327,8 +348,8 @@ if not args.no_orbslam:
             istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
 
             # Make sure poses we're interpolating between are for the body in the world frame
-            current_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[istart, :]))
-            next_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[iend, :]))
+            start_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[istart, :]))
+            end_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[iend, :]))
 
 
             # Now interpolate between these two poses
@@ -336,12 +357,12 @@ if not args.no_orbslam:
             interp_timestamps = np.linspace(slam_data[istart,0], slam_data[iend, 0], N_POINTS)
 
             # Use Slerp to interpolate on SO(3) rotations
-            interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+            interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
             slurpy = Slerp(interp_interval, interp_rots)
             interpolated_rotations = slurpy(interp_timestamps)
 
             # Use linspace to interpolate on R3 positions
-            interpolated_positions = np.linspace(current_pose[:3, 3], next_pose[:3, 3], N_POINTS)
+            interpolated_positions = np.linspace(start_pose[:3, 3], end_pose[:3, 3], N_POINTS)
 
             # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
             idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
@@ -366,8 +387,8 @@ if not args.no_orbslam:
             istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
 
             # Need to get an HTM, but don't need to convert to body in world frame, because we're already in the body frame.
-            current_pose = slam_quat_to_HTM(headset_data[istart, :])
-            next_pose = slam_quat_to_HTM(headset_data[iend, :])
+            start_pose = slam_quat_to_HTM(headset_data[istart, :])
+            end_pose = slam_quat_to_HTM(headset_data[iend, :])
 
 
             # Now interpolate between these two poses
@@ -375,12 +396,12 @@ if not args.no_orbslam:
             interp_timestamps = np.linspace(headset_data[istart,0], headset_data[iend, 0], N_POINTS)
 
             # Use Slerp to interpolate on SO(3) rotations
-            interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
+            interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
             slurpy = Slerp(interp_interval, interp_rots)
             interpolated_rotations = slurpy(interp_timestamps)
 
             # Use linspace to interpolate on R3 positions
-            interpolated_positions = np.linspace(current_pose[:3, 3], next_pose[:3, 3], N_POINTS)
+            interpolated_positions = np.linspace(start_pose[:3, 3], end_pose[:3, 3], N_POINTS)
 
             # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
             idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
@@ -531,141 +552,72 @@ else: # No ORBSLAM available
     ### Write UWB data to its own csv file, and to all_data
     uwb_csv = []
     uwb_range_distribution = []
-    for j in topic_to_processing['/uwb_ranges'][1]:
-        csv_row = []
-        for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
-        uwb_csv.append(csv_row)
-        all_data.append(j)
-        uwb_range_distribution.append(j['range'])
-
+    uwb_json = aggregate_uwb(topic_to_processing, uwb_csv, uwb_range_distribution)
     with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
     ### Write IMU data to its own csv file, and to all_data
     imu_csv = []
-    for j in topic_to_processing['/camera/camera/imu'][1]:
-        csv_row = []
-        for k, v in j.items(): csv_row.append(v)
-        imu_csv.append(csv_row)
-        all_data.append(j)
+    imu_json = aggregate_uwb(topic_to_processing, imu_csv, all_data)
     with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
-    ### Write SLAM camera trajectory
-    body_poses_world_frame = [] # More accurately, this is a list of T_world_to_body
     all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
 
-    # TODO: Write vicon poses to all_json and body_poses_world_frame
-    # let headset_data be formatted like slam_data, i.e. TUM and timestamp
-    # then I can convert to HTM
+    ### Apply transforms to the Vicon tracking data of cam1
 
-    for i in range(headset_data.shape[0]-1):
-
-        # T_world_to_body = get_T_world_to_body(T_sorigin_to_sbody) # SO I just need to work out the coord frame here
-        T_world_to_body = slam_quat_to_HTM(headset_data[i,:]) # Convert headset data from quat to HTM
-        body_poses_world_frame.append( [headset_data[i,0]] + list(T_world_to_body.flatten()) )
-
-        # NOTE: Not changing these field names because I don't want to blow up all downstream programs
-        j = {
-            "t": headset_data[i,0],
+    def vicon_tracked_body_to_my_body(T_world_to_vcam1):
+        return Transforms.T_cam1_to_body * T_world_to_vcam1
+    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, headset_data)
+    
+    # Convert from nparray to json format
+    # Add Vicon poses to all_data
+    vicon_json = [ {
+            "t": body_pose[0],
             "type": "vicon_pose",
-            "T_body_world" : T_world_to_body
-        }
-        all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
-
-
+            "T_body_world" : slam_quat_to_HTM(body_pose[1:]),
+            "v_world": {
+                    "vx": body_v[1],
+                    "vy": body_v[2],
+                    "vz": body_v[3]
+            }
+        } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
 
     # If we're using real UWB ranges, but have no compass
     # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
+    assisted_uwb_json = []
     if (args.real_uwb_orientation_support):
+        assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_body_poses, 100)
+    
 
-        N_POINTS = 100
-        all_uwb_mes = topic_to_processing['/uwb_ranges'][1]
-        vwf = np.array(body_poses_world_frame) # 'vicon world frame' instead of 'slam world frame'
-        for u in all_uwb_mes:
-            tdiffs = np.abs(vwf[:,0] - u["t"])
-            vicon_idx1 = np.argmin(tdiffs)
-            tdiffs[vicon_idx1] = np.inf
-            vicon_idx2 = np.argmin(tdiffs)
-
-            istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
-
-            # Need to get an HTM, but don't need to convert to body in world frame, because we're already in the body frame.
-            current_pose = slam_quat_to_HTM(headset_data[istart, :])
-            next_pose = slam_quat_to_HTM(headset_data[iend, :])
-
-
-            # Now interpolate between these two poses
-            interp_interval = [headset_data[istart,0], headset_data[iend, 0]]
-            interp_timestamps = np.linspace(headset_data[istart,0], headset_data[iend, 0], N_POINTS)
-
-            # Use Slerp to interpolate on SO(3) rotations
-            interp_rots = R.from_matrix([current_pose[:3, :3], next_pose[:3, :3]])
-            slurpy = Slerp(interp_interval, interp_rots)
-            interpolated_rotations = slurpy(interp_timestamps)
-
-            # Use linspace to interpolate on R3 positions
-            interpolated_positions = np.linspace(current_pose[:3, 3], next_pose[:3, 3], N_POINTS)
-
-            # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
-            idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
-
-            world_frame_pose = np.eye(4)
-            world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
-            world_frame_pose[:3, 3] = interpolated_positions[idx_match]
-
-            u2 = copy.deepcopy(u)
-            u2["type"] = "assisted_uwb"
-            u2["T_body_world"] = world_frame_pose
-            all_data.append(u2)
-
-
-
-    # Compute velocities from body poses in the world frame
-    # This way you can set a velocity prior at any time
-
-    np_body_poses_world_frame = np.array(body_poses_world_frame)
-    dt = np.diff(np_body_poses_world_frame[:,0])
-    dx = np.diff(np_body_poses_world_frame[:,4]) / dt
-    dy = np.diff(np_body_poses_world_frame[:,7]) / dt
-    dz = np.diff(np_body_poses_world_frame[:,10]) / dt
-    headset_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
-
-    print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {headset_data_velocity_world_frame[0][0]}")
-
-    # For all slam poses
-    slam_idx = 0
-    for i, mes in enumerate(all_data):
-        if mes["type"] == "slam_pose":
-            mes_ = mes
-            if slam_idx < headset_data_velocity_world_frame.shape[0]:
-                mes_["v_world"] = {
-                    "vx": headset_data_velocity_world_frame[ slam_idx, 1],
-                    "vy": headset_data_velocity_world_frame[ slam_idx, 2],
-                    "vz": headset_data_velocity_world_frame[ slam_idx, 3]
-                }
-            all_data[i] = mes_ # Extend each pose to also include its computed velocity
-            slam_idx +=1
-
-
-
-
-    with open(f'{out_ml}/body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(body_poses_world_frame))
-
-    body_poses_world_frame_tum = []
-    with open(f'{outpath}/body_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(body_poses_world_frame_tum))
+    def vicon_tracked_uwb1_to_uwb1_tx(T_world_to_vuwb1): Transforms.T_vuwb_to_uwbtx @ T_world_to_vuwb1
+    vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, vicon_data["UWB1"])
+    
+    # Knowing the decawave in world frame, and my body in world frame
+    # I can compute the translation from body to decawave in the body frame.
+    # Remember, in GTSAM we assume that the transform from body to decawave is just a translation
+    Transforms.T_body_to_decawave = np.eye(4)
+    translations = [] # Translation from body origin to tx
+    for i in range(vicon_tx_poses.shape[0]-1):
+        T_world_to_tx = vicon_tx_poses[i, :].reshape((4,4))
+        T_world_to_vbody = vicon_body_poses[i, :].reshape((4,4))
+        T_body_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
+        translations.append(T_body_to_tx[:3,3])
+    Transforms.T_body_to_decawave = np.average(np.array(translations), axis=1)
 
     ### Write Infra1 frames to output directory, and provide references in all_data
-    for j in topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]:
-        cv2.imwrite(out_infra1+"/"+j["name"], j["raw"])
-        j_no_image = { k:v for k,v in j.items() if not (k == "raw") }
-        all_data.append(j_no_image)
+    infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
 
     ### Write Infra2 frames to output directory, and provide references in all_data
-    for j in topic_to_processing['/camera/camera/infra2/image_rect_raw'][1]:
-        cv2.imwrite(out_infra2+"/"+j["name"], j["raw"])
-        j_no_image = { k:v for k,v in j.items() if not (k == "raw") }
-        all_data.append(j_no_image)
+    infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
+
+    # Compose the final factor graph dataset
+    all_data = all_data + uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json
+
+    # TODO: Compose the final synthetic dataset
 
 
+    vicon_body_poses_tum = [ HTM_to_TUM(pose) for pose in vicon_body_poses]
+    with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
+    with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
 
     class NumpyEncoder(json.JSONEncoder):
         def default(self, obj):
@@ -675,27 +627,30 @@ else: # No ORBSLAM available
                 return vars(obj)
             return super().default(obj)
 
-
-
     ### Copy all world information: transforms, anchors, apriltags, to output
 
-    # Use Decawave and AprilTag marker information to compute and
+    # Use Vicon information to compute the world frame for our tags and anchors
+    world_frame_anchors = []
+    world_frame_tags = {}
+    for tracked_name, data in vicon_data:
+        if "UWB" in tracked_name:
+            # Compute the tx point over all poses, then average them.
+            uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
+            world_frame_anchors.append({
+                "ID": tracked_name.replace("UWB", ""),
+                "position": uwb_tx_position
+            })
+        if "April" in tracked_name:
+            # Just dump the first transform for that tag in
+            world_frame_tags[tracked_name.replace("April","")] = slam_quat_to_HTM(data[0])[1:]
+
     out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
-    world_frame_anchors = [{
-        "ID":3,
-        "position": Transforms.T_world_to_anchor[:3, 3]
-    }]
     json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
     out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
     json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
 
 
     out_tags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
-    # TODO: 
-
-    world_frame_tags = {
-        "1": None
-    }
     json.dump(world_frame_tags, out_tags, cls=NumpyEncoder, indent=1)
     out_tags_trial = open(f'{outpath}/apriltags.json', 'w')
     json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)

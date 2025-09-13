@@ -280,7 +280,7 @@ print(f"{n_points=} {n_skip=} {n_slam_skip=}")
 
 if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.interpolate_slam=} .")
 
-print(f"{timestamp_to_detection_pose=}")
+# print(f"{timestamp_to_detection_pose=}")
 print(f"Tag corrections {len(timestamp_to_detection_pose.keys())}")
 
 for i in range(slam_data.shape[0]-1):

@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 # Example usage:
-# python3 post_process.py -t stereoi_sq -c cam_target_daslab -a pilot3/anchors.json -p pilot3/apriltags.json -i 10
+# python3 post_process_vicon.py --trial_name irl3_los_walking --vicon_trial_name irl3_los_walking --map_vicon_to_uwb --no_orbslam True -c cam_target_daslab
 
 
 parser = argparse.ArgumentParser(description="Stream collector")
@@ -47,7 +47,7 @@ parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
 parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
-parser.add_argument("--map_vicon_to_uwb", default=False, type=bool)
+parser.add_argument("--map_vicon_to_uwb", action="store_true")
 
 args = parser.parse_args()
 
@@ -217,8 +217,7 @@ Transforms.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
 #Transform from vicon marker to the center of an Apriltag
 # I manually selected the center of the apriltag to define the vicon frame
-# Assuming Vicon provides the world -> item transform. But should double check this.
-Transforms.T_world_to_april = slam_quat_to_HTM(vicon_data["April7"][0])
+Transforms.T_april_to_world = slam_quat_to_HTM(vicon_data["April7"][0])[1:]
 
 # Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
 
@@ -685,9 +684,13 @@ else: # No ORBSLAM available
     for i in range(vicon_tx_poses.shape[0]-1):
         T_world_to_tx = vicon_tx_poses[i, 1:].reshape((4,4))
         T_world_to_vbody = vicon_body_poses[i, 1:].reshape((4,4))
-        T_body_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
-        translations.append(T_body_to_tx[:3,3])
-    Transforms.T_body_to_decawave = np.average(np.array(translations), axis=1)
+        T_vbody_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
+        translations.append(T_vbody_to_tx[:3,3])
+    print(f"{np.average(np.array(translations), axis=0)=}")
+    print(f"{np.std(np.array(translations), axis=0)=}")
+    Transforms.T_body_to_decawave = np.eye(4)
+    Transforms.T_body_to_decawave[:3,3] = np.average(np.array(translations), axis=0)
+
 
     ### Write Infra1 frames to output directory, and provide references in all_data
     infra1_json = aggregate_infra1(topic_to_processing, out_infra1)

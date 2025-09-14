@@ -137,8 +137,8 @@ def aggregate_tracker(trackbody_to_mybody_func, tracker_data_tum):
     tracker_body_poses = []  # All T_world_to_body as flattened HTM
 
     for i in range(tracker_data_tum.shape[0]-1):
-        T_world_to_tracker = slam_quat_to_HTM(tracker_data_tum[i, :])   # tracker pose as HTM
-        T_world_to_body = trackbody_to_mybody_func(T_world_to_tracker)     # convert tracker to body frame
+        tracker_pose = slam_quat_to_HTM(tracker_data_tum[i, :])   # tracker pose as HTM
+        T_world_to_body = trackbody_to_mybody_func(tracker_pose)     # convert tracker to body frame
         tracker_body_poses.append([tracker_data_tum[i, 0]] + list(T_world_to_body.flatten()))
     
     tracker_body_poses = np.array(tracker_body_poses)
@@ -155,14 +155,14 @@ def aggregate_tracker(trackbody_to_mybody_func, tracker_data_tum):
 
     return tracker_body_poses, tracker_body_velocities
 
-def aggregate_assisted_uwb(uwb_json, trackbody_to_mybody_func, tracker_cam1_poses, N_POINTS):
+def aggregate_assisted_uwb(uwb_json, trackbody_to_mybody_func, tracker_data_tum, N_POINTS):
     assisted_uwb_json = []
     N_POINTS = 100
 
     # Still using 'vicon' syntax but thats ok who cares
-    # Must interpolate in original frame, then apply your transform
+    # Must interpolate in original frame, then apply your transform: hence trackbody_to_mybody_func
     
-    vwf = tracker_cam1_poses # 'vicon world frame' instead of 'slam world frame'
+    vwf = tracker_data_tum # 'vicon world frame' instead of 'slam world frame'
     
     for u in uwb_json:
         # Find the closest timestamp vicon measurements to our UWB range
@@ -172,8 +172,8 @@ def aggregate_assisted_uwb(uwb_json, trackbody_to_mybody_func, tracker_cam1_pose
         vicon_idx2 = np.argmin(tdiffs)
         istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
 
-        start_pose = vwf[istart, 1:].reshape((4,4)) # Turn flattened HTM back to a matrix
-        end_pose = vwf[iend, 1:].reshape((4,4))
+        start_pose = slam_quat_to_HTM(vwf[istart, :]) # Convert quat -> HTM
+        end_pose = slam_quat_to_HTM(vwf[iend, :])
 
         interp_pose = interpolate_pose(
             start_pose, vwf[istart, 0],

@@ -27,7 +27,7 @@ def HTM_to_TUM(T): # 2D pose matrix to TUM format
     # Non timestamped
     return [ t[0], t[1], t[2], quat[0], quat[1], quat[2], quat[3]]
 
-def slam_HTM_to_TUM(nparr):
+def slam_HTM_to_TUM(nparr): # Same as HTM to TUM but it handles timestamped
     if len(nparr) != 17:
         print(nparr)
         raise ValueError("Expected 17 elements: [timestamp, 16 HTM elements]")

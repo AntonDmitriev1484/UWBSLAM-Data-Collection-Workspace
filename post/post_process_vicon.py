@@ -124,19 +124,72 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
 
 
 
-# Filter for messages within bag timestamp range.
+# # Filter for messages within bag timestamp range.
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
-vicon_data = crop_vicon(vicon_data, START, END) # TODO: Make sure vicon_data is mutated here?
+vicon_data = crop_vicon(vicon_data, START, END)
 
-mobile_objects = ["LeftRS", "UWB1"]
-vicon_data = clean_vicon(vicon_data, mobile_objects) # And here also?
+# # Create 3D plot
 
-cam1_vicon_data = vicon_data["LeftRS"]
-print(f" Vicon frequency { len(cam1_vicon_data) / (END-START)}")
+# x , y, z = [], [], []
+# for d in vicon_data["LeftRS"]:
+#     x.append(d[1])
+#     y.append(d[2])
+#     z.append(d[3])
+# fig = plt.figure(figsize=(8, 6))
+# ax = fig.add_subplot(111, projection="3d")
+# # Plot the trajectory
+# ax.plot(x, y, z, label="LeftRS trajectory")
+# # Mark start and end points
+# ax.scatter(x[0], y[0], z[0], color="green", s=60, label="Start")
+# ax.scatter(x[-1], y[-1], z[-1], color="red", s=60, label="End")
+
+# # Labels
+# ax.set_xlabel("X position")
+# ax.set_ylabel("Y position")
+# ax.set_zlabel("Z position")
+# ax.set_xlim(-2, 2)
+# ax.set_ylim(-2,2)
+# ax.set_zlim(0,2)
+# ax.set_title("3D Trajectory of LeftRS")
+# ax.legend()
+
+# plt.show()
+
+vicon_data = clean_vicon(vicon_data)
+
+# Plotting checkpoint
+# Create 3D plot
+
+# x , y, z = [], [], []
+# for d in vicon_data["LeftRS"]:
+#     x.append(d[1])
+#     y.append(d[2])
+#     z.append(d[3])
+# fig = plt.figure(figsize=(8, 6))
+# ax = fig.add_subplot(111, projection="3d")
+
+# # Plot the trajectory
+# ax.plot(x, y, z, label="LeftRS trajectory")
+
+# # Mark start and end points
+# ax.scatter(x[0], y[0], z[0], color="green", s=60, label="Start")
+# ax.scatter(x[-1], y[-1], z[-1], color="red", s=60, label="End")
+
+# # Labels
+# ax.set_xlabel("X position")
+# ax.set_ylabel("Y position")
+# ax.set_zlabel("Z position")
+# ax.set_xlim(-2, 2)
+# ax.set_ylim(-2,2)
+# ax.set_zlim(0,2)
+# ax.set_title("3D Trajectory of LeftRS")
+# ax.legend()
+
+# plt.show()
 
 # Need to adjust vicon data to actual timestamps instead of just frame indices
 
@@ -550,6 +603,8 @@ if not args.no_orbslam:
     json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)
 else: # No ORBSLAM available
 
+    all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
+
     ### Write UWB data to its own csv file, and to all_data
     uwb_csv = []
     uwb_range_distribution = []
@@ -561,20 +616,46 @@ else: # No ORBSLAM available
     imu_json = aggregate_imu(topic_to_processing, imu_csv)
     with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
-    all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
-
     ### Apply transforms to the Vicon tracking data of cam1
 
-    def vicon_tracked_body_to_my_body(T_world_to_vcam1):
-        return Transforms.T_cam1_to_body * T_world_to_vcam1
-    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(cam1_vicon_data))
-    
+    def vicon_tracked_body_to_my_body(T_vcam1_to_world):
+        # By default, vicon pose tracking gives you the T_vcam1_to_world
+        return Transforms.T_cam1_to_body @ np.linalg.inv(T_vcam1_to_world)
+    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]))
+
+    x , y, z = [], [], []
+    for d in vicon_body_poses:
+        H = np.linalg.inv(d[1:].reshape((4,4)))
+        t = H[:3,3]
+        x.append(t[0])
+        y.append(t[1])
+        z.append(t[2])
+    fig = plt.figure(figsize=(8, 6))
+    ax = fig.add_subplot(111, projection="3d")
+    # Plot the trajectory
+    ax.plot(x, y, z, label="LeftRS trajectory")
+    # Mark start and end points
+    ax.scatter(x[0], y[0], z[0], color="green", s=60, label="Start")
+    ax.scatter(x[-1], y[-1], z[-1], color="red", s=60, label="End")
+
+    # Labels
+    ax.set_xlabel("X position")
+    ax.set_ylabel("Y position")
+    ax.set_zlabel("Z position")
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-2,2)
+    ax.set_zlim(0,2)
+    ax.set_title("3D Trajectory of LeftRS")
+    ax.legend()
+
+    plt.show()
+
     # Convert from nparray to json format
     # Add Vicon poses to all_data
     vicon_json = [ {
             "t": float(body_pose[0]),
             "type": "vicon_pose",
-            "T_body_world" : slam_quat_to_HTM(body_pose[1:]),
+            "T_body_world" : body_pose[1:].reshape((4,4)),
             "v_world": {
                     "vx": float(body_v[1]),
                     "vy": float(body_v[2]),
@@ -587,14 +668,12 @@ else: # No ORBSLAM available
     assisted_uwb_json = []
     #TODO: Bugged
     # print(args.map_vicon_to_uwb)
-    # if args.map_vicon_to_uwb:
-    #     cam1_vicon_data_htm = []
-    #     for i in range(len(cam1_vicon_data)-1):
-    #         cam1_vicon_data_htm.append(slam_quat_to_HTM(cam1_vicon_data[i]))
-    #     assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(cam1_vicon_data_htm), 100)
+    if args.map_vicon_to_uwb:
+        assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]), 100)
     
 
-    def vicon_tracked_uwb1_to_uwb1_tx(T_world_to_vuwb1): return Transforms.T_vuwb_to_uwbtx @ T_world_to_vuwb1
+    def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
+        return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
     vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
     
     # Knowing the decawave in world frame, and my body in world frame
@@ -615,25 +694,13 @@ else: # No ORBSLAM available
     ### Write Infra2 frames to output directory, and provide references in all_data
     infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
-    print(uwb_json[:5])
-    print()
-    print(imu_json[:5])
-    print()
-    print(infra1_json[:5])
-    print()
-    print(vicon_json[:5])
-    print()
-    print(assisted_uwb_json[:5])
-
     # Compose the final factor graph dataset
     all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json
-    print(all_data[:10])
 
     # TODO: Compose the final synthetic dataset
 
-
-    # TODO: Bugged Edit and comment back in later My brain is fucking fried
-    # vicon_body_poses_tum = [ HTM_to_TUM(pose) for pose in vicon_body_poses]
+    # TODO: Weird error, I will come back to this later.
+    # vicon_body_poses_tum = [ slam_HTM_to_TUM(pose) for pose in vicon_body_poses]
     # with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
     # with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
 
@@ -679,11 +746,10 @@ else: # No ORBSLAM available
     # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
     print("Checking frequency of real data")
     print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-    print(f" Measured vicon frequency {len(cam1_vicon_data) / (END-START)}")
+    print(f" Measured vicon frequency {len(vicon_data['LeftRS']) / (END-START)}")
 
     # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
     all_data = filtt(all_data)
-
     all_data = sorted(all_data, key=lambda x: x["t"])
     json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
 

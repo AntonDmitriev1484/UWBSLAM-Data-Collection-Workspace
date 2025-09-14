@@ -70,9 +70,9 @@ def parse_vicon_csv(file, subject_filter=None):
             t = float(row["timestamp"]) / 1e3 # Convert from ms to s
             subj = row["subject"]
 
-            tx = float(row["x"]) / 1000.0  # mm → m
-            ty = float(row["y"]) / 1000.0
-            tz = float(row["z"]) / 1000.0
+            tx = float(row["x"]) / 1e3  # mm → m
+            ty = float(row["y"]) / 1e3
+            tz = float(row["z"]) / 1e3
             qx = float(row["qx"])
             qy = float(row["qy"])
             qz = float(row["qz"])
@@ -100,47 +100,54 @@ def crop_vicon(vicon_data, start, end):
         vicon_data[tracked_name] = data # this does
     return vicon_data
 
-def clean_vicon(vicon_data, mobile):
+def clean_vicon(vicon_data):
 
     # If you're mobile and translation suddenly drop to 0, that means tracking was lost. interpolate that thang
 
     for tracked_name, data in vicon_data.items():
-        if tracked_name in mobile:
 
-            # In case we start off at a 0 pose, find the first non-zero pose
-            # and set that to be our start pose
-            start_pose = None
-            for i in range(0, len(data)):
-                if np.linalg.norm(np.array(data[i])[1:4]) != 0: 
-                    start_pose = np.array(data[i]) # Next valid TUM timestamped pose
-                    break
-            for p in range(0,i):
-                data[p] = start_pose
+        # In case we start off at a 0 pose, find the first non-zero pose
+        # and set that to be our start pose
 
-            # Now clean
-            for i in range(1, len(data)):
-                if np.linalg.norm(np.array(data[i])[1:4]) == 0: 
+        def is_outlier(tum_pose):
+            norm = np.linalg.norm(np.array(tum_pose)[1:])
+            return norm <= 1e-5
 
-                    last_pose = np.array(data[i-1]) # Last valid TUM timestamped pose
-                    next_pose = None
-                    for j in range(i, len(data)): # Find next valid TUM timestamped pose
-                        # print(data)
-                        if np.linalg.norm(np.array(data[j])[1:4]) != 0: 
-                            next_pose = np.array(data[j]) # Next valid TUM timestamped pose
-                            break
+        # If our starting pose is an outlier and we have nothing to interpolate between
+        start_pose = None
+        for i in range(0, len(data)):
+            if not is_outlier(data[i]): 
+                start_pose = np.array(data[i]) # Next valid TUM timestamped pose
+                break
 
-                    current_timestamp = data[i][0]
-                    interp_pose = interpolate_pose(
-                        slam_quat_to_HTM(last_pose), last_pose[0],
-                        slam_quat_to_HTM(next_pose), next_pose[0],
-                        current_timestamp, 100
-                    )
+        print(f"{start_pose=}")
+        for p in range(0,i):
+            data[p] = start_pose
 
+        # Now clean
+        for i in range(1, len(data)):
+            if is_outlier(data[i]):
+
+                last_pose = np.array(data[i-1]) # Last valid TUM timestamped pose
+                next_pose = None
+                interp_pose = None
+                for j in range(i+1, len(data)): # Find next valid TUM timestamped pose
+                    # print(data)
+                    if not is_outlier(data[j]): 
+                        next_pose = np.array(data[j]) # Next valid TUM timestamped pose
+                        current_timestamp = data[i][0]
+                        interp_pose = interpolate_pose(
+                            slam_quat_to_HTM(last_pose), last_pose[0],
+                            slam_quat_to_HTM(next_pose), next_pose[0],
+                            current_timestamp, 100
+                        )
+                        break
+
+                if interp_pose is not None:
                     interp_pose = HTM_to_TUM(interp_pose) # Returns a non timestamped HTM
-
                     data[i] = np.insert(interp_pose, 0, current_timestamp) #I'm pretty sure this mutates the original array?
 
-        vicon_data[tracked_name] = data
+    vicon_data[tracked_name] = data
     return vicon_data
 
 def get_tx_position(T_vuwb_to_uwbtx, data):

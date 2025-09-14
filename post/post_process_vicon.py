@@ -47,7 +47,7 @@ parser.add_argument("--apriltags_file", "-p", type=str)
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
 parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
-parser.add_argument("--real_uwb_orientation_support", default=False, type=bool)
+parser.add_argument("--map_vicon_to_uwb", default=False, type=bool)
 
 args = parser.parse_args()
 
@@ -334,7 +334,7 @@ if not args.no_orbslam:
 
     # If we're using real UWB ranges, but have no compass
     # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
-    if (args.real_uwb_orientation_support):
+    if (args.map_slam_to_uwb):
 
         N_POINTS = 100
         all_uwb_mes = topic_to_processing['/uwb_ranges'][1]
@@ -558,7 +558,7 @@ else: # No ORBSLAM available
 
     ### Write IMU data to its own csv file, and to all_data
     imu_csv = []
-    imu_json = aggregate_uwb(topic_to_processing, imu_csv, all_data)
+    imu_json = aggregate_imu(topic_to_processing, imu_csv)
     with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
     all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
@@ -572,13 +572,13 @@ else: # No ORBSLAM available
     # Convert from nparray to json format
     # Add Vicon poses to all_data
     vicon_json = [ {
-            "t": body_pose[0],
+            "t": float(body_pose[0]),
             "type": "vicon_pose",
             "T_body_world" : slam_quat_to_HTM(body_pose[1:]),
             "v_world": {
-                    "vx": body_v[1],
-                    "vy": body_v[2],
-                    "vz": body_v[3]
+                    "vx": float(body_v[1]),
+                    "vy": float(body_v[2]),
+                    "vz": float(body_v[3])
             }
         } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
 
@@ -586,8 +586,8 @@ else: # No ORBSLAM available
     # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
     assisted_uwb_json = []
     #TODO: Bugged
-    # print(args.real_uwb_orientation_support)
-    # if args.real_uwb_orientation_support:
+    # print(args.map_vicon_to_uwb)
+    # if args.map_vicon_to_uwb:
     #     cam1_vicon_data_htm = []
     #     for i in range(len(cam1_vicon_data)-1):
     #         cam1_vicon_data_htm.append(slam_quat_to_HTM(cam1_vicon_data[i]))
@@ -615,8 +615,19 @@ else: # No ORBSLAM available
     ### Write Infra2 frames to output directory, and provide references in all_data
     infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
+    print(uwb_json[:5])
+    print()
+    print(imu_json[:5])
+    print()
+    print(infra1_json[:5])
+    print()
+    print(vicon_json[:5])
+    print()
+    print(assisted_uwb_json[:5])
+
     # Compose the final factor graph dataset
-    all_data = all_data + uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json
+    all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json
+    print(all_data[:10])
 
     # TODO: Compose the final synthetic dataset
 
@@ -670,8 +681,6 @@ else: # No ORBSLAM available
     print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
     print(f" Measured vicon frequency {len(cam1_vicon_data) / (END-START)}")
 
-    print(all_data[:10]) #TODO: BUgged, something is very wrong with all_data, it seems to contain both jsons and raw float values for some reason.
-    
     # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
     all_data = filtt(all_data)
 

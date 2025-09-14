@@ -217,7 +217,7 @@ Transforms.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
 #Transform from vicon marker to the center of an Apriltag
 # I manually selected the center of the apriltag to define the vicon frame
-Transforms.T_april_to_world = slam_quat_to_HTM(vicon_data["April7"][0])[1:]
+Transforms.T_april_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
 
 # Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
 

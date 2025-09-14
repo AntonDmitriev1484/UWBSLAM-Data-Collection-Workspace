@@ -154,7 +154,7 @@ def get_tx_position(T_vuwb_to_uwbtx, data):
     positions = []
     for pose in data:
         if np.linalg.norm(np.array(pose)[1:4]) != 0: # Filter out lost tracking outliers
-            T_world_to_vuwb = slam_quat_to_HTM(pose)
-            T_world_to_tx = T_vuwb_to_uwbtx @ T_world_to_vuwb
+            T_vuwb_to_world = slam_quat_to_HTM(pose)
+            T_world_to_tx = T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb_to_world)
             positions.append(np.linalg.inv(T_world_to_tx)[:3,3])
-    return np.average(np.array(positions), axis=1)
+    return np.average(np.array(positions), axis=0)

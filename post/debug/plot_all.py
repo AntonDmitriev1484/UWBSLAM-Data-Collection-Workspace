@@ -66,7 +66,7 @@ if __name__== "__main__":
         positions_world = np.array(positions_world)
 
         ax.plot(positions_world[:, 0], positions_world[:, 1], positions_world[:, 2],
-                label='Vicon Trajectory', color='orange')
+                label='Vicon Trajectory', color='green')
         ax.scatter(*positions_world[0], color='green', marker='^', label='Vicon Start')
         ax.scatter(*positions_world[-1], color='red', marker='^', label='Vicon End')
 
@@ -74,6 +74,21 @@ if __name__== "__main__":
             for i in range(0, len(vicon_poses), args.stride):
                 draw_axes(ax, vicon_poses[i], length=0.4)
 
+    # --- Anchor positions ---
+    anchor_path = f"../out/{args.trial_name}_post/anchors.json"
+    with open(anchor_path, 'r') as f:
+        anchor_data = json.load(f)
+        for d in anchor_data:
+            ax.scatter(d["position"][0], d["position"][1], d["position"][2], color='purple')
+            ax.text(
+                d["position"][0],  # shift a bit in X
+                d["position"][1],  # shift a bit in Y
+                d["position"][2],
+                d["ID"], color="black"
+            )
+
+    # --- Apriltag pose ---
+    
     # Common settings
     ax.set_xlabel("X")
     ax.set_ylabel("Y")

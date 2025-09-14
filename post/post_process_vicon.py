@@ -159,6 +159,7 @@ vicon_data = crop_vicon(vicon_data, START, END)
 
 # plt.show()
 
+mobile_objects = ["LeftRS", "UWB1"]
 vicon_data = clean_vicon(vicon_data)
 
 # Plotting checkpoint
@@ -718,7 +719,7 @@ else: # No ORBSLAM available
     world_frame_anchors = []
     world_frame_tags = {}
     for tracked_name, data in vicon_data.items():
-        if "UWB" in tracked_name:
+        if "UWB" in tracked_name and tracked_name not in mobile_objects:
             # Compute the tx point over all poses, then average them.
             uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
             world_frame_anchors.append({

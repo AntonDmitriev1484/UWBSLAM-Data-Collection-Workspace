@@ -111,7 +111,7 @@ def draw_detection(frame, detection, out_path, CAM1_INTRINSICS):
     cv2.imwrite(full_path, img)
     print(f"Saved AprilTag pose image to {full_path}")
 
-def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
+def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags, T_world_to_tag=None):
 
     ZERO_TIMESTAMP = slam_data[0][0]
 
@@ -171,7 +171,7 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
         print(f" Tag {id}, satisfactory detections: {len(best_tag_detections)}, , with average detection threshold of {avg_detection}") 
 
         # Filter out all tag decision margins under 55
-        best_tag_detections = [(d,f) for d, f in best_tag_detections if d.decision_margin > 55]
+        best_tag_detections = [(d,f) for d, f in best_tag_detections if d.decision_margin > 40]
         best_detections += best_tag_detections
 
         
@@ -179,42 +179,41 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
     
     random.shuffle(best_detections)
 
-    with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
+    # # Compute the timestamp and pose mapping of all timestamps with perfect sync.
+    # timestamp_to_detection_pose_prior = {} # Map timestamp, to list of apriltag poses at that timestamp.
 
-    # Compute the timestamp and pose mapping of all timestamps with perfect sync.
-    timestamp_to_detection_pose_prior = {} # Map timestamp, to list of apriltag poses at that timestamp.
+    # for (detection, frame) in best_detections:
+    #     frame_t = frame["t"]
+    #     closest_slam_pose_index = np.argmin(np.abs(slam_data[:, 0] - frame_t))
+    #     slam_pose = slam_data[closest_slam_pose_index, :]
+    #     slam_t = slam_pose[0]
+    #     match_delay = abs(slam_t - frame_t)
 
-    for (detection, frame) in best_detections:
-        frame_t = frame["t"]
-        closest_slam_pose_index = np.argmin(np.abs(slam_data[:, 0] - frame_t))
-        slam_pose = slam_data[closest_slam_pose_index, :]
-        slam_t = slam_pose[0]
-        match_delay = abs(slam_t - frame_t)
-
-        if match_delay < 1e-3:
+    #     if match_delay < 1e-3:
                 
-            T_tag_to_cam1 = np.eye(4)
-            T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
-            T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
-            pose_slam = slam_quat_to_HTM(slam_pose)
-            T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
+    #         T_tag_to_cam1 = np.eye(4)
+    #         T_tag_to_cam1[:3, :3] = detection.pose_R # Tag reports rotation from tag to cam1
+    #         T_tag_to_cam1[:3, 3] = detection.pose_t.flatten() # Tag reports vector from cam1 to tag
+    #         pose_slam = slam_quat_to_HTM(slam_pose)
+    #         T_sbody_to_sorigin = pose_slam # SLAM pose is the transform from the slam origin to slam body
 
-            DETECTED_ID = str(detection.tag_id)
+    #         DETECTED_ID = str(detection.tag_id)
 
-            mes = np.array(apriltag_world_locations[DETECTED_ID])
-            R_tag_to_world = np.linalg.inv(mes[:3,:3])
-            t_world_to_tag_in_world = mes[:3,3]
-            T_tag_to_world = np.eye(4)
-            T_tag_to_world[:3, 3] = t_world_to_tag_in_world
-            T_tag_to_world[:3,:3] = R_tag_to_world
-            T_world_to_tag = np.linalg.inv(T_tag_to_world)
+    # with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
+    #         mes = np.array(apriltag_world_locations[DETECTED_ID])
+    #         R_tag_to_world = np.linalg.inv(mes[:3,:3])
+    #         t_world_to_tag_in_world = mes[:3,3]
+    #         T_tag_to_world = np.eye(4)
+    #         T_tag_to_world[:3, 3] = t_world_to_tag_in_world
+    #         T_tag_to_world[:3,:3] = R_tag_to_world
+    #         T_world_to_tag = np.linalg.inv(T_tag_to_world)
 
-            T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
+    #         T_world_to_cam1_detect = T_tag_to_cam1 @ T_world_to_tag
 
-            if slam_t in timestamp_to_detection_pose_prior.keys():
-                timestamp_to_detection_pose_prior[slam_t].append(T_world_to_cam1_detect)
-            else:
-                timestamp_to_detection_pose_prior[slam_t] = [T_world_to_cam1_detect]
+    #         if slam_t in timestamp_to_detection_pose_prior.keys():
+    #             timestamp_to_detection_pose_prior[slam_t].append(T_world_to_cam1_detect)
+    #         else:
+    #             timestamp_to_detection_pose_prior[slam_t] = [T_world_to_cam1_detect]
 
 
     # Then of those, pick the detections with the lowest delay and maximum decision margin
@@ -279,15 +278,22 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     DETECTED_ID = str(detection.tag_id)
 
-    mes = np.array(apriltag_world_locations[DETECTED_ID])
-    R_tag_to_world = np.linalg.inv(mes[:3,:3])
-    t_world_to_tag_in_world = mes[:3,3]
-    T_tag_to_world = np.eye(4)
-    T_tag_to_world[:3, 3] = t_world_to_tag_in_world
-    T_tag_to_world[:3,:3] = R_tag_to_world
+    if T_world_to_tag is None:
 
-    T_world_to_tag = np.linalg.inv(T_tag_to_world)
-    Transforms.T_world_to_tag = T_world_to_tag
+        with open(in_apriltags, 'r') as fs: apriltag_world_locations = json.load(fs)
+
+        # If we aren't using the vicon system, read the hand measured pose out of the file
+        mes = np.array(apriltag_world_locations[DETECTED_ID])
+        R_tag_to_world = np.linalg.inv(mes[:3,:3]) # Because of how I write poses down.
+        t_world_to_tag_in_world = mes[:3,3]
+        T_tag_to_world = np.eye(4)
+        T_tag_to_world[:3, 3] = t_world_to_tag_in_world
+        T_tag_to_world[:3,:3] = R_tag_to_world
+
+        T_world_to_tag = np.linalg.inv(T_tag_to_world)
+        Transforms.T_world_to_tag = T_world_to_tag
+    else:
+        Transforms.T_world_to_tag = T_world_to_tag
 
 
     Transforms.origin = np.eye(4)
@@ -307,7 +313,8 @@ def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, i
 
     # with open(f'/home/admi3ev/ws/post/debug/world_frame_dbg.json', 'w') as fs: json.dump(vars(world_frame_dbg),fs, cls=NumpyEncoder, indent=1)
 
-    return Transforms, timestamp_to_detection_pose_prior
+    # return Transforms
+    return Transforms
 
 def extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags):
 

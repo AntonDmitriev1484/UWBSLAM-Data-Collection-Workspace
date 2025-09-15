@@ -35,8 +35,8 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 parser = argparse.ArgumentParser(description="Stream collector")
 parser.add_argument("--trial_name" , "-t", type=str)
-parser.add_argument("--vicon_trial_name", type=str)
-parser.add_argument("--no_orbslam", type=bool) # If we have no orbslam data, just use vicon for everything instead.
+parser.add_argument("--vicon_available", action="store_true")
+parser.add_argument("--slam_available", action="store_true") # If we have no orbslam data, just use vicon for everything instead.
 # Since my code is a mess, I'm going to do this by just aliasing the vicon data into the slam arrays.
 
 parser.add_argument("--calibration_file", "-c", type=str)
@@ -160,7 +160,7 @@ Transforms.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
 #Transform from vicon marker to the center of an Apriltag
 # I manually selected the center of the apriltag to define the vicon frame
-Transforms.T_april_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
+Transforms.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
 
 # Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
 
@@ -193,374 +193,53 @@ Transforms.T_body_to_decawave = np.eye(4)
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 
-if not args.no_orbslam:
+all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
+
+slam_json = []
+if args.slam_available:
     slam_kf_data = np.loadtxt(in_slam_kf)
     slam_kf_data[:,0] *= 1e-9
     slam_data = np.loadtxt(in_slam)
     slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
     ZERO_TIMESTAMP = slam_data[0][0]
 
-    Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
-    # Transforms = extract_apriltag_pose_PnP(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags)
+    # Use the apriltag to compute Transforms.T_world_to_sorigin
+    Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, 
+                                       in_kalibr, in_apriltags, 
+                                       T_world_to_tag=np.linalg.inv(Transforms.T_vapril_to_world))
 
-    if args.override_april_start is not None:
-        Transforms.T_slam_world[:3, 3] = np.array(json.loads(args.override_april_start))
+    def slam_tracked_body_to_my_body(T_cam1_to_sorigin): # SLAM quat gives you the transform from cam1 frame to slam origin
+        return Transforms.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin
+    slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
 
-
-    # T_world_to_body = T_body_to_imu^-1 x T_imu_to_sbody^-1 x T_sorigin_to_sbody x T_world_to_sorigin
-    def get_T_world_to_body(T_sorigin_to_sbody): # A function because I re-use this a lot
-        T_world_to_body = (
-                        Transforms.T_world_to_sorigin 
-                        @ T_sorigin_to_sbody 
-                        @ np.linalg.inv(Transforms.T_imu_to_sbody) 
-                        @ np.linalg.inv(Transforms.T_body_to_imu)
-        )
-        return T_world_to_body
-
-    ### Write UWB data to its own csv file, and to all_data
-    uwb_csv = []
-    uwb_range_distribution = []
-    for j in topic_to_processing['/uwb_ranges'][1]:
-        csv_row = []
-        for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
-        uwb_csv.append(csv_row)
-        all_data.append(j)
-        uwb_range_distribution.append(j['range'])
-
-    with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
-
-    ### Write IMU data to its own csv file, and to all_data
-    imu_csv = []
-    for j in topic_to_processing['/camera/camera/imu'][1]:
-        csv_row = []
-        for k, v in j.items(): csv_row.append(v)
-        imu_csv.append(csv_row)
-        all_data.append(j)
-    with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
-
-    ### Write SLAM camera trajectory
-    body_poses_world_frame = [] # More accurately, this is a list of T_world_to_body
-    slam_poses_slam_frame = [] # This is a list of T_sorigin_to_sbody
-    slam_pose_counter = 0
-
-    all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
-
-
-    dataset_slam_pose_frequency = 20 # Need something evenly divisible
-    if (args.synthetic_slam_frequency > dataset_slam_pose_frequency):
-        print("Error: can't be doin that buddy")
-        exit()
-
-    ### Synthetic data generation happens alongside all of the regular world frame transforms
-    # Should really separate this code out...
-    n_slam_skip = 0
-    if args.synthetic_slam_frequency > 0: n_slam_skip = int(dataset_slam_pose_frequency/args.synthetic_slam_frequency)
-    if args.synthetic_uwb_frequency > dataset_slam_pose_frequency:
-        n_points = int(args.synthetic_uwb_frequency / dataset_slam_pose_frequency) # How much we need to interpolate between existing orbslam points to get this frequency of UWB
-        n_skip = 1
-    else:
-        n_points = 1
-        n_skip = 0
-        if args.synthetic_uwb_frequency > 0:
-            n_skip = int(dataset_slam_pose_frequency / args.synthetic_uwb_frequency)
-        # ex. with 20 hz GT, and we want to simulate 5Hz UWB, we only interpolate synthetic UWB between every 4th pose pair.
-
-    print(f"{n_points=} {n_skip=} {n_slam_skip=}")
-
-    if args.interpolate_slam > 0: print(f"Interpolating SLAM trajectory to {args.interpolate_slam=} .")
-
-    for i in range(slam_data.shape[0]-1):
-
-        T_sorigin_to_sbody = slam_quat_to_HTM(slam_data[i,:])
-        slam_poses_slam_frame.append( [slam_data[i,0]] + list(T_sorigin_to_sbody.flatten()) )
-
-        T_world_to_body = get_T_world_to_body(T_sorigin_to_sbody)
-
-        body_poses_world_frame.append( [slam_data[i,0]] + list(T_world_to_body.flatten()) )
-
-        # NOTE: Not changing these field names because I don't want to blow up all downstream programs
-        j = {
-            "t": slam_data[i,0],
+        # Convert from nparray to json format
+    # Add Vicon poses to all_data
+    slam_json = [ {
+            "t": float(body_pose[0]),
             "type": "slam_pose",
-            "T_body_slam" : T_sorigin_to_sbody,
-            "T_body_world" : T_world_to_body
-        }
-        all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
-        slam_pose_counter += 1
-
-        if n_slam_skip > 0 and (slam_pose_counter % n_slam_skip == 0): all_data_synthetic.append(j)
-
-        if n_skip > 0 and (slam_pose_counter % n_skip == 0) and n_points > 0:
-            # All in the slam frame first
-            current_timestamp = slam_data[i, 0]
-            start_pose = T_sorigin_to_sbody
-            end_pose = slam_quat_to_HTM(slam_data[i+1,:])
-
-            dTranslation = (end_pose[:3,3] - start_pose[:3,3]) / (n_points+1)
-            dt = (slam_data[i+1,0] - slam_data[i, 0]) / (n_points+1)
-
-            Rotato = end_pose[:3, :3]
-
-            # Use Slerp to interpolate on SE(3) rotations
-            interp_interval = [slam_data[i,0], slam_data[i+1, 0]]
-            interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
-            slurpy = Slerp(interp_interval, interp_rots)
-            interp_timestamps = np.linspace(slam_data[i,0], slam_data[i+1, 0], n_points)
-            interpolated_rotations = slurpy(interp_timestamps)
-
-            # Use kinematics to interpolate on R3 positions
-            for p in range(1, n_points+1): # I think theres also a SCIPY function to do this cleaner, like SLERP but for XYZ.
-
-                interp_slam_pose = np.eye(4)
-                interp_slam_pose[:3, 3] = start_pose[:3, 3] + (dTranslation * p)
-                # interp_slam_pose[:3, :3] = Rotation
-                interp_slam_pose[:3,:3] = interpolated_rotations[p-1].as_matrix() # T_sorigin_to_sbody
-
-                interp_world_pose = get_T_world_to_body(interp_slam_pose)
-
-                interp_timestamp = current_timestamp + (p * dt)
-
-                j = { # Note: Only going to interpolate into all.json because I just need this in the tracker.
-                    "t": interp_timestamp,
-                    "type": "synthetic_uwb",
-                    "T_body_slam" : interp_slam_pose,
-                    "T_body_world" : interp_world_pose
-                }
-                all_data_synthetic.append(j)
-
-    # If we're using real UWB ranges, but have no compass
-    # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
-    if (args.map_slam_to_uwb):
-
-        N_POINTS = 100
-        all_uwb_mes = topic_to_processing['/uwb_ranges'][1]
-        swf = np.array(body_poses_world_frame)
-        for u in all_uwb_mes:
-
-            tdiffs = np.abs(swf[:,0] - u["t"])
-            slam_idx1 = np.argmin(tdiffs)
-            tdiffs[slam_idx1] = np.inf
-            slam_idx2 = np.argmin(tdiffs)
-
-            istart, iend = sorted([slam_idx1, slam_idx2]) # Make sure indices are ascending
-
-            # Make sure poses we're interpolating between are for the body in the world frame
-            start_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[istart, :]))
-            end_pose = get_T_world_to_body(slam_quat_to_HTM(slam_data[iend, :]))
-
-
-            # Now interpolate between these two poses
-            interp_interval = [slam_data[istart,0], slam_data[iend, 0]]
-            interp_timestamps = np.linspace(slam_data[istart,0], slam_data[iend, 0], N_POINTS)
-
-            # Use Slerp to interpolate on SO(3) rotations
-            interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
-            slurpy = Slerp(interp_interval, interp_rots)
-            interpolated_rotations = slurpy(interp_timestamps)
-
-            # Use linspace to interpolate on R3 positions
-            interpolated_positions = np.linspace(start_pose[:3, 3], end_pose[:3, 3], N_POINTS)
-
-            # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
-            idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
-
-            world_frame_pose = np.eye(4)
-            world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
-            world_frame_pose[:3, 3] = interpolated_positions[idx_match]
-
-            u2 = copy.deepcopy(u)
-            u2["type"] = "assisted_uwb"
-            u2["T_body_world"] = world_frame_pose
-            all_data.append(u2)
-
-        # Now, in addition to the interpolated SLAM pose, add an interpolated VICON pose to each assisted_uwb measurement.
-        for mes in [a for a in all_data if a["type"]=="assisted_uwb"]:
-
-            tdiffs = np.abs(swf[:,0] - u["t"])
-            vicon_idx1 = np.argmin(tdiffs)
-            tdiffs[vicon_idx1] = np.inf
-            vicon_idx2 = np.argmin(tdiffs)
-
-            istart, iend = sorted([vicon_idx1, vicon_idx2]) # Make sure indices are ascending
-
-            # Need to get an HTM, but don't need to convert to body in world frame, because we're already in the body frame.
-            start_pose = slam_quat_to_HTM(cam1_vicon_data[istart, :])
-            end_pose = slam_quat_to_HTM(cam1_vicon_data[iend, :])
-
-
-            # Now interpolate between these two poses
-            interp_interval = [cam1_vicon_data[istart,0], cam1_vicon_data[iend, 0]]
-            interp_timestamps = np.linspace(cam1_vicon_data[istart,0], cam1_vicon_data[iend, 0], N_POINTS)
-
-            # Use Slerp to interpolate on SO(3) rotations
-            interp_rots = R.from_matrix([start_pose[:3, :3], end_pose[:3, :3]])
-            slurpy = Slerp(interp_interval, interp_rots)
-            interpolated_rotations = slurpy(interp_timestamps)
-
-            # Use linspace to interpolate on R3 positions
-            interpolated_positions = np.linspace(start_pose[:3, 3], end_pose[:3, 3], N_POINTS)
-
-            # Fetch the closest interpolation timestamp to the uwb measurement, and map that interpolated pose to the measurement
-            idx_match = np.argmin(np.abs(interp_timestamps - u["t"]))
-
-            world_frame_pose = np.eye(4)
-            world_frame_pose[:3,:3] = interpolated_rotations[idx_match].as_matrix()
-            world_frame_pose[:3, 3] = interpolated_positions[idx_match]
-
-            mes["vicon_T_body_world"] = world_frame_pose
-            u2 = copy.deepcopy(u)
-            u2["type"] = "assisted_uwb"
-            u2["T_body_world"] = world_frame_pose
-            all_data.append(u2)
-
-    # Compute velocities from body poses in the world frame
-    # This way you can set a velocity prior at any time
-
-    np_body_poses_world_frame = np.array(body_poses_world_frame)
-    dt = np.diff(np_body_poses_world_frame[:,0])
-    dx = np.diff(np_body_poses_world_frame[:,4]) / dt
-    dy = np.diff(np_body_poses_world_frame[:,7]) / dt
-    dz = np.diff(np_body_poses_world_frame[:,10]) / dt
-    headset_data_velocity_world_frame = np.vstack((np_body_poses_world_frame[:np_body_poses_world_frame.shape[0]-1,0], dx, dy, dz)).T
-    # By default. I map the velocity between t and t+1 to timestamp t. This should be good enough for prioring.
-    # These are of dubious quality.... lol
-
-    print(f" SLAM world 0: {body_poses_world_frame[0][0]} SLAM velocity world 0: {headset_data_velocity_world_frame[0][0]}")
-
-    # For all slam poses
-    slam_idx = 0
-    for i, mes in enumerate(all_data):
-        if mes["type"] == "slam_pose":
-            mes_ = mes
-            if slam_idx < headset_data_velocity_world_frame.shape[0]:
-                mes_["v_world"] = {
-                    "vx": headset_data_velocity_world_frame[ slam_idx, 1],
-                    "vy": headset_data_velocity_world_frame[ slam_idx, 2],
-                    "vz": headset_data_velocity_world_frame[ slam_idx, 3]
-                }
-            all_data[i] = mes_ # Extend each pose to also include its computed velocity
-            slam_idx +=1
-
-
-
-
-
-
-    with open(f'{out_ml}/body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(body_poses_world_frame))
-    with open(f'{out_ml}/slam_poses_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(slam_poses_slam_frame))
-
-    body_poses_world_frame_tum = []
-    with open(f'{outpath}/body_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(body_poses_world_frame_tum))
-
-    ### Write SLAM KF trajectory
-
-    kf_body_poses_world_frame = []
-    kf_slam_poses_slam_frame = []
-    for i in range(slam_kf_data.shape[0]):
-
-        T_body_slam = slam_quat_to_HTM(slam_kf_data[i,:])
-        kf_slam_poses_slam_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()) )
-
-        T_body_world = Transforms.T_slam_world @ T_body_slam
-
-        kf_body_poses_world_frame.append( [slam_kf_data[i,0]] + list(T_body_slam.flatten()))
-
-        j = {
-            "t": slam_kf_data[i,0],
-            "type": "slam_kf_pose",
-            "T_body_slam" : T_body_slam,
-            "T_body_world" : T_body_world
-        }
-        all_data.append(j) # Append GT data into the sensor stream to use as Pose3 corrections
-
-
-    with open(f'{out_ml}/kf_body_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(kf_body_poses_world_frame))
-    with open(f'{out_ml}/kf_slam_poses_slam_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(kf_slam_poses_slam_frame))
-
-
-    ### Write Infra1 frames to output directory, and provide references in all_data
-    for j in topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]:
-        cv2.imwrite(out_infra1+"/"+j["name"], j["raw"])
-        j_no_image = { k:v for k,v in j.items() if not (k == "raw") }
-        all_data.append(j_no_image)
-
-    ### Write Infra2 frames to output directory, and provide references in all_data
-    for j in topic_to_processing['/camera/camera/infra2/image_rect_raw'][1]:
-        cv2.imwrite(out_infra2+"/"+j["name"], j["raw"])
-        j_no_image = { k:v for k,v in j.items() if not (k == "raw") }
-        all_data.append(j_no_image)
-
-
-
-    class NumpyEncoder(json.JSONEncoder):
-        def default(self, obj):
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            if hasattr(obj, '__dict__'):
-                return vars(obj)
-            return super().default(obj)
-
-
-
-    ### Copy all world information: transforms, anchors, apriltags, to output
-    shutil.copy(in_anchors, f'{outpath}/anchors.json')
-    shutil.copy(in_apriltags, f'{outpath}/apriltags.json')
-    with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
-
-
-    # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
-    print("Checking frequency of real data")
-    print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-    print(f" Measured SLAM frequency {len(slam_data) / (END-START)}")
-
-    print("Checking frequency of synthetic data")
-
-    nuwb, ngt = (0,0)
-    for mes in all_data_synthetic:
-        if mes["type"] == "synthetic_uwb": nuwb+=1
-        if mes["type"] == "slam_pose": ngt+=1
-
-    generated_fuwb = nuwb / (END-START)
-    generated_fgt = ngt / (END-START)
-
-    if args.crop_start is not None: # These numbers might be a bit off with crop start
-        generated_fuwb = nuwb / (END-args.crop_start)
-        generated_fgt = ngt / (END-args.crop_start)
-
-    print(f" UWB requested f={args.synthetic_uwb_frequency} , generated f={generated_fuwb}")
-    print(f" GT requested f={args.synthetic_slam_frequency} , generated f={generated_fgt}")
-
-    # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
-    all_data = filtt(all_data)
-    all_data = sorted(all_data, key=lambda x: x["t"])
-    json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
-
-    # All data syntehtic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
-    all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
-    all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
-
-    json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
-    # So all synthetic files will have a unique name
-
-
-    json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)
-else: # No ORBSLAM available
-
-    all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
-
-    ### Write UWB data to its own csv file, and to all_data
-    uwb_csv = []
-    uwb_range_distribution = []
-    uwb_json = aggregate_uwb(topic_to_processing, uwb_csv, uwb_range_distribution)
-    with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
-
-    ### Write IMU data to its own csv file, and to all_data
-    imu_csv = []
-    imu_json = aggregate_imu(topic_to_processing, imu_csv)
-    with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
-
-    ### Apply transforms to the Vicon tracking data of cam1
-
+            "T_body_world" : body_pose[1:].reshape((4,4)),
+            "v_world": {
+                    "vx": float(body_v[1]),
+                    "vy": float(body_v[2]),
+                    "vz": float(body_v[3])
+            }
+        } for body_pose, body_v in zip( list(slam_body_poses), list(slam_body_velocities))]
+
+### Write UWB data to its own csv file, and to all_data
+uwb_csv = []
+uwb_range_distribution = []
+uwb_json = aggregate_uwb(topic_to_processing, uwb_csv, uwb_range_distribution)
+with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
+
+### Write IMU data to its own csv file, and to all_data
+imu_csv = []
+imu_json = aggregate_imu(topic_to_processing, imu_csv)
+with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
+
+### Apply transforms to the Vicon tracking data of cam1
+
+vicon_json = []
+if args.vicon_available:
     def vicon_tracked_body_to_my_body(T_vcam1_to_world):
         # By default, vicon pose tracking gives you the T_vcam1_to_world
         return Transforms.T_cam1_to_body @ np.linalg.inv(T_vcam1_to_world)
@@ -579,99 +258,96 @@ else: # No ORBSLAM available
             }
         } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
 
-    # If we're using real UWB ranges, but have no compass
-    # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
-    assisted_uwb_json = []
-    #TODO: Bugged
-    # print(args.map_vicon_to_uwb)
-    if args.map_vicon_to_uwb:
-        # TODO: I suspect I'm somehow passing non cleaned data to this function
-        assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]), 100)
-    
-    vicon_uwbtx_json = []
-    if args.include_vicon_tx_pose:
+# If we're using real UWB ranges, but have no compass
+# We interpolate on SLAM poses to match a synthetic orientation to that UWB range
+assisted_uwb_json = []
+if args.map_vicon_to_uwb:
+    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]), 100)
 
-        def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
-            return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
-        vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
+vicon_uwbtx_json = []
+if args.include_vicon_tx_pose:
+    # Has problems because in the IRL datasets we frequently lose tracking of the UWB1
+    def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
+        return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
+    vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
 
-        vicon_uwbtx_json = [ {
-            "t": float(body_pose[0]),
-            "type": "vicon_tx_pose",
-            "T_body_world" : body_pose[1:].reshape((4,4)),
-        } for body_pose in list(vicon_tx_poses)]
+    vicon_uwbtx_json = [ {
+        "t": float(body_pose[0]),
+        "type": "vicon_tx_pose",
+        "T_body_world" : body_pose[1:].reshape((4,4)),
+    } for body_pose in list(vicon_tx_poses)]
 
-    ### Write Infra1 frames to output directory, and provide references in all_data
-    infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
+### Write Infra1 frames to output directory, and provide references in all_data
+infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
 
-    ### Write Infra2 frames to output directory, and provide references in all_data
-    infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
+### Write Infra2 frames to output directory, and provide references in all_data
+infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
     # Compose the final factor graph dataset
-    all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json + vicon_uwbtx_json
+all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json
 
-    # TODO: Compose the final synthetic dataset
+# TODO: Compose the final synthetic dataset
 
-    # TODO: Weird error, I will come back to this later.
-    # vicon_body_poses_tum = [ slam_HTM_to_TUM(pose) for pose in vicon_body_poses]
-    # with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
-    # with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
+# TODO: Weird error, I will come back to this later.
+# vicon_body_poses_tum = [ slam_HTM_to_TUM(pose) for pose in vicon_body_poses]
+# with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
+# with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
 
-    class NumpyEncoder(json.JSONEncoder):
-        def default(self, obj):
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            if hasattr(obj, '__dict__'):
-                return vars(obj)
-            return super().default(obj)
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if hasattr(obj, '__dict__'):
+            return vars(obj)
+        return super().default(obj)
 
-    ### Copy all world information: transforms, anchors, apriltags, to output
+### Copy all world information: transforms, anchors, apriltags, to output
 
-    # Use Vicon information to compute the world frame for our tags and anchors
-    world_frame_anchors = []
-    world_frame_tags = {}
-    for tracked_name, data in vicon_data.items():
-        if "UWB" in tracked_name and tracked_name not in mobile_objects:
-            # Compute the tx point over all poses, then average them.
-            uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
-            world_frame_anchors.append({
-                "ID": tracked_name.replace("UWB", ""),
-                "position": uwb_tx_position
-            })
-        if "April" in tracked_name:
-            # Just dump the first transform for that tag in
-            world_frame_tags[tracked_name.replace("April","")] = slam_quat_to_HTM(data[0])[1:]
+# Use Vicon information to compute the world frame for our tags and anchors
+world_frame_anchors = []
+world_frame_tags = {}
+for tracked_name, data in vicon_data.items():
+    if "UWB" in tracked_name and tracked_name not in mobile_objects:
+        # Compute the tx point over all poses, then average them.
+        uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
+        world_frame_anchors.append({
+            "ID": tracked_name.replace("UWB", ""),
+            "position": uwb_tx_position
+        })
+    if "April" in tracked_name:
+        # Just dump the first transform for that tag in
+        world_frame_tags[tracked_name.replace("April","")] = slam_quat_to_HTM(data[0])[1:]
 
-    out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
-    json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
-    out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
-    json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
-
-
-    out_tags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
-    json.dump(world_frame_tags, out_tags, cls=NumpyEncoder, indent=1)
-    out_tags_trial = open(f'{outpath}/apriltags.json', 'w')
-    json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
+out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
+json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
+out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
+json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
 
 
-    with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
-
-    # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
-    print("Checking frequency of real data")
-    print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-    print(f" Measured vicon frequency {len(vicon_data['LeftRS']) / (END-START)}")
-
-    # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
-    all_data = filtt(all_data)
-    all_data = sorted(all_data, key=lambda x: x["t"])
-    json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
-
-    # All data synthetic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
-    all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
-    all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
-
-    json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
-    # So all synthetic files will have a unique name
+out_tags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
+json.dump(world_frame_tags, out_tags, cls=NumpyEncoder, indent=1)
+out_tags_trial = open(f'{outpath}/apriltags.json', 'w')
+json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
 
 
-    json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)
+with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
+
+# Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
+print("Checking frequency of real data")
+print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
+print(f" Measured vicon frequency {len(vicon_data['LeftRS']) / (END-START)}")
+
+# Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
+all_data = filtt(all_data)
+all_data = sorted(all_data, key=lambda x: x["t"])
+json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
+
+# All data synthetic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
+all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
+all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
+
+json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
+# So all synthetic files will have a unique name
+
+
+json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)

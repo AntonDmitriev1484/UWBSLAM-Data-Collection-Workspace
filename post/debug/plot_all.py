@@ -78,7 +78,7 @@ if __name__== "__main__":
                 draw_axes(ax, vicon_poses[i], length=0.4)
 
     # --- Vicon TX trajectory ---
-    if args.vicon and vicon_tx_poses:
+    if args.vicon_tx and vicon_tx_poses:
         positions_world = []
         for body_pose in vicon_tx_poses:
             positions_world.append(np.linalg.inv(body_pose)[:3, 3])  # translation
@@ -90,8 +90,8 @@ if __name__== "__main__":
         ax.scatter(*positions_world[-1], color='red', marker='^', label='Vicon End')
 
         if args.stride > 0:
-            for i in range(0, len(vicon_poses), args.stride):
-                draw_axes(ax, vicon_poses[i], length=0.4) 
+            for i in range(0, len(vicon_tx_poses), args.stride):
+                draw_axes(ax, vicon_tx_poses[i], length=0.4) 
 
     # --- Anchor positions ---
     anchor_path = f"../out/{args.trial_name}_post/anchors.json"

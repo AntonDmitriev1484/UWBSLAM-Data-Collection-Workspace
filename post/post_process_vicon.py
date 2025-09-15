@@ -585,37 +585,21 @@ else: # No ORBSLAM available
     #TODO: Bugged
     # print(args.map_vicon_to_uwb)
     if args.map_vicon_to_uwb:
+        # TODO: I suspect I'm somehow passing non cleaned data to this function
         assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]), 100)
     
-
-    def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
-        return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
-    vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
-
     vicon_uwbtx_json = []
     if args.include_vicon_tx_pose:
+
+        def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
+            return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
+        vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
+
         vicon_uwbtx_json = [ {
             "t": float(body_pose[0]),
             "type": "vicon_tx_pose",
             "T_body_world" : body_pose[1:].reshape((4,4)),
         } for body_pose in list(vicon_tx_poses)]
-
-    # Knowing the decawave in world frame, and my body in world frame
-    # I can compute the translation from body to decawave in the body frame.
-    # Remember, in GTSAM we assume that the transform from body to decawave is just a translation
-    # Note: This seems very noisy and probably not feasible
-    # Transforms.T_body_to_decawave = np.eye(4)
-    # translations = [] # Translation from body origin to tx
-    # for i in range(vicon_tx_poses.shape[0]-1):
-    #     T_world_to_tx = vicon_tx_poses[i, 1:].reshape((4,4))
-    #     T_world_to_vbody = vicon_body_poses[i, 1:].reshape((4,4))
-    #     T_vbody_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
-    #     translations.append(T_vbody_to_tx[:3,3])
-    # print(f"{np.average(np.array(translations), axis=0)=}")
-    # print(f"{np.std(np.array(translations), axis=0)=}")
-    # Transforms.T_body_to_decawave = np.eye(4)
-    # Transforms.T_body_to_decawave[:3,3] = np.average(np.array(translations), axis=0)
-
 
     ### Write Infra1 frames to output directory, and provide references in all_data
     infra1_json = aggregate_infra1(topic_to_processing, out_infra1)

@@ -48,6 +48,7 @@ parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i contro
 parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
 parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
 parser.add_argument("--map_vicon_to_uwb", action="store_true")
+parser.add_argument("--include_vicon_tx_pose", action="store_true")
 
 args = parser.parse_args()
 
@@ -123,7 +124,6 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
 # Then, lastly, we can create all.json using the buffered measurements.
 
 
-
 # # Filter for messages within bag timestamp range.
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
@@ -132,65 +132,8 @@ print(f"Data start {START} cropped to {args.crop_start}")
 
 vicon_data = crop_vicon(vicon_data, START, END)
 
-# # Create 3D plot
-
-# x , y, z = [], [], []
-# for d in vicon_data["LeftRS"]:
-#     x.append(d[1])
-#     y.append(d[2])
-#     z.append(d[3])
-# fig = plt.figure(figsize=(8, 6))
-# ax = fig.add_subplot(111, projection="3d")
-# # Plot the trajectory
-# ax.plot(x, y, z, label="LeftRS trajectory")
-# # Mark start and end points
-# ax.scatter(x[0], y[0], z[0], color="green", s=60, label="Start")
-# ax.scatter(x[-1], y[-1], z[-1], color="red", s=60, label="End")
-
-# # Labels
-# ax.set_xlabel("X position")
-# ax.set_ylabel("Y position")
-# ax.set_zlabel("Z position")
-# ax.set_xlim(-2, 2)
-# ax.set_ylim(-2,2)
-# ax.set_zlim(0,2)
-# ax.set_title("3D Trajectory of LeftRS")
-# ax.legend()
-
-# plt.show()
-
 mobile_objects = ["LeftRS", "UWB1"]
 vicon_data = clean_vicon(vicon_data)
-
-# Plotting checkpoint
-# Create 3D plot
-
-# x , y, z = [], [], []
-# for d in vicon_data["LeftRS"]:
-#     x.append(d[1])
-#     y.append(d[2])
-#     z.append(d[3])
-# fig = plt.figure(figsize=(8, 6))
-# ax = fig.add_subplot(111, projection="3d")
-
-# # Plot the trajectory
-# ax.plot(x, y, z, label="LeftRS trajectory")
-
-# # Mark start and end points
-# ax.scatter(x[0], y[0], z[0], color="green", s=60, label="Start")
-# ax.scatter(x[-1], y[-1], z[-1], color="red", s=60, label="End")
-
-# # Labels
-# ax.set_xlabel("X position")
-# ax.set_ylabel("Y position")
-# ax.set_zlabel("Z position")
-# ax.set_xlim(-2, 2)
-# ax.set_ylim(-2,2)
-# ax.set_zlim(0,2)
-# ax.set_title("3D Trajectory of LeftRS")
-# ax.legend()
-
-# plt.show()
 
 # Need to adjust vicon data to actual timestamps instead of just frame indices
 
@@ -623,33 +566,6 @@ else: # No ORBSLAM available
         return Transforms.T_cam1_to_body @ np.linalg.inv(T_vcam1_to_world)
     vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]))
 
-    x , y, z = [], [], []
-    for d in vicon_body_poses:
-        H = np.linalg.inv(d[1:].reshape((4,4)))
-        t = H[:3,3]
-        x.append(t[0])
-        y.append(t[1])
-        z.append(t[2])
-    fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    # Plot the trajectory
-    ax.plot(x, y, z, label="LeftRS trajectory")
-    # Mark start and end points
-    ax.scatter(x[0], y[0], z[0], color="green", s=60, label="Start")
-    ax.scatter(x[-1], y[-1], z[-1], color="red", s=60, label="End")
-
-    # Labels
-    ax.set_xlabel("X position")
-    ax.set_ylabel("Y position")
-    ax.set_zlabel("Z position")
-    ax.set_xlim(-2, 2)
-    ax.set_ylim(-2,2)
-    ax.set_zlim(0,2)
-    ax.set_title("3D Trajectory of LeftRS")
-    ax.legend()
-
-    plt.show()
-
     # Convert from nparray to json format
     # Add Vicon poses to all_data
     vicon_json = [ {
@@ -675,21 +591,30 @@ else: # No ORBSLAM available
     def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
         return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
     vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
-    
+
+    vicon_uwbtx_json = []
+    if args.include_vicon_tx_pose:
+        vicon_uwbtx_json = [ {
+            "t": float(body_pose[0]),
+            "type": "vicon_tx_pose",
+            "T_body_world" : body_pose[1:].reshape((4,4)),
+        } for body_pose in list(vicon_tx_poses)]
+
     # Knowing the decawave in world frame, and my body in world frame
     # I can compute the translation from body to decawave in the body frame.
     # Remember, in GTSAM we assume that the transform from body to decawave is just a translation
-    Transforms.T_body_to_decawave = np.eye(4)
-    translations = [] # Translation from body origin to tx
-    for i in range(vicon_tx_poses.shape[0]-1):
-        T_world_to_tx = vicon_tx_poses[i, 1:].reshape((4,4))
-        T_world_to_vbody = vicon_body_poses[i, 1:].reshape((4,4))
-        T_vbody_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
-        translations.append(T_vbody_to_tx[:3,3])
-    print(f"{np.average(np.array(translations), axis=0)=}")
-    print(f"{np.std(np.array(translations), axis=0)=}")
-    Transforms.T_body_to_decawave = np.eye(4)
-    Transforms.T_body_to_decawave[:3,3] = np.average(np.array(translations), axis=0)
+    # Note: This seems very noisy and probably not feasible
+    # Transforms.T_body_to_decawave = np.eye(4)
+    # translations = [] # Translation from body origin to tx
+    # for i in range(vicon_tx_poses.shape[0]-1):
+    #     T_world_to_tx = vicon_tx_poses[i, 1:].reshape((4,4))
+    #     T_world_to_vbody = vicon_body_poses[i, 1:].reshape((4,4))
+    #     T_vbody_to_tx = T_world_to_tx @ np.linalg.inv(T_world_to_vbody)
+    #     translations.append(T_vbody_to_tx[:3,3])
+    # print(f"{np.average(np.array(translations), axis=0)=}")
+    # print(f"{np.std(np.array(translations), axis=0)=}")
+    # Transforms.T_body_to_decawave = np.eye(4)
+    # Transforms.T_body_to_decawave[:3,3] = np.average(np.array(translations), axis=0)
 
 
     ### Write Infra1 frames to output directory, and provide references in all_data
@@ -699,7 +624,7 @@ else: # No ORBSLAM available
     infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
     # Compose the final factor graph dataset
-    all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json
+    all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + assisted_uwb_json + vicon_uwbtx_json
 
     # TODO: Compose the final synthetic dataset
 

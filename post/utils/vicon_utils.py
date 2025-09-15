@@ -120,7 +120,6 @@ def clean_vicon(vicon_data):
                 start_pose = np.array(data[i]) # Next valid TUM timestamped pose
                 break
 
-        print(f"{start_pose=}")
         for p in range(0,i):
             data[p] = start_pose
 

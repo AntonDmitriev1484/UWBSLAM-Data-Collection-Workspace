@@ -157,7 +157,6 @@ def aggregate_tracker(trackbody_to_mybody_func, tracker_data_tum):
 
 def aggregate_assisted_uwb(uwb_json, trackbody_to_mybody_func, tracker_data_tum, N_POINTS):
     assisted_uwb_json = []
-    N_POINTS = 100
 
     # Still using 'vicon' syntax but thats ok who cares
     # Must interpolate in original frame, then apply your transform: hence trackbody_to_mybody_func

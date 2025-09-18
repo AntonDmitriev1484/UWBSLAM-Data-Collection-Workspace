@@ -136,8 +136,8 @@ if __name__== "__main__":
         ax.scatter(*positions_world[-1], color='red', marker='^', label='Vicon End')
 
         if args.stride > 0:
-            for i in range(0, len(vicon_poses), args.stride):
-                draw_axes(ax, vicon_poses[i], length=0.4) 
+            for i in range(0, len(vicon_tx_poses), args.stride):
+                draw_axes(ax, vicon_tx_poses[i], length=0.4) 
 
     # --- Vicon TX trajectory ---
     if args.uwbmap_vicon and uwbmap_vicon_poses:

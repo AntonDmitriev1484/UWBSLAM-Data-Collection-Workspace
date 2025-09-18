@@ -41,19 +41,23 @@ parser.add_argument("--slam_available", action="store_true") # If we have no orb
 
 parser.add_argument("--calibration_file", "-c", type=str)
 parser.add_argument("--crop_start", type=float) # Pass the ROS timestamp that you want to crop away all data before. Data will still be used to compute transforms.
-parser.add_argument("--alias", type=str) # Alias for a dataset, ex. if you want to keep a cropped and uncropped version of a dataset
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
+
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
-parser.add_argument("--synthetic_uwb_frequency", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
-parser.add_argument("--synthetic_slam_frequency", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
+parser.add_argument("--synth_uwb_f", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
+parser.add_argument("--synth_slam_f", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
+parser.add_argument("--synth_vicon_f", default=0, type=int)
+
 parser.add_argument("--map_vicon_to_uwb", action="store_true")
 parser.add_argument("--include_vicon_tx_pose", action="store_true")
+parser.add_argument("--vicon_for_worldframing", action="store_true") 
+# Instead of using AprilTag detection to convert SLAM to world frame, use Vicon.
+# This lets us see a trajectory with just SLAM error, instead of SLAM + AprilTag error
 
 args = parser.parse_args()
 
 outpath = f'./out/{args.trial_name}_post'
-if args.alias is not None: outpath = f'./out/{args.alias}_post'
 
 out_infra1 = f'{outpath}/infra1'
 out_infra2 = f'{outpath}/infra2'
@@ -127,6 +131,7 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
 # # Filter for messages within bag timestamp range.
 START = reader.start_time * 1e-9
 END = reader.end_time * 1e-9
+args.crop_start += START
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
@@ -166,17 +171,19 @@ Transforms.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
 
 # The SLAM tracked body is the left camera.
 # Is my body frame defined as the IMU?
-# My body frame is Z-up, x forward?
-Transforms.T_body_to_imu = np.array([
+# My body frame is Z-up, X-right, Y-forward
+Transforms.T_imu_to_body = np.array([
                                         [1, 0, 0, 0],
                                         [0, 0, 1, 0],
                                         [0, -1, 0, 0],
                                         [0, 0, 0, 1]
                                     ])
 
+Transforms.T_body_to_imu = np.linalg.inv(Transforms.T_imu_to_body)
+
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
 Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
-Transforms.T_cam1_to_body = np.linalg.inv(Transforms.T_body_to_imu) @ np.linalg.inv(Transforms.T_imu_to_cam1)
+Transforms.T_cam1_to_body = Transforms.T_imu_to_body @ np.linalg.inv(Transforms.T_imu_to_cam1)
 Transforms.T_body_to_decawave = np.eye(4)
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
@@ -203,10 +210,33 @@ if args.slam_available:
     slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
     ZERO_TIMESTAMP = slam_data[0][0]
 
-    # Use the apriltag to compute Transforms.T_world_to_sorigin
-    Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, 
-                                       in_kalibr, in_apriltags, 
-                                       T_world_to_tag=np.linalg.inv(Transforms.T_vapril_to_world))
+    if not args.vicon_for_worldframing:
+        # Use the apriltag to compute Transforms.T_world_to_sorigin
+        Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, 
+                                        in_kalibr, in_apriltags, 
+                                        T_world_to_tag=np.linalg.inv(Transforms.T_vapril_to_world))
+    else:
+        # Find the closest Vicon pose to the SLAM origin
+        cam1_slam =slam_data # Cam1 w.r.t SLAM origin
+        cam1_vicon = np.array(vicon_data["LeftRS"]) # Cam1 w.r.t vicon world origin
+
+        # Pick the pose for alignment based of the best timestamp sync
+        best_t = np.inf
+        best_vicon_idx = 0
+        best_slam_i = 0
+        for i in range(cam1_slam.shape[0]):
+            timediffs = np.abs( cam1_slam[i,0] - cam1_vicon[:,0])
+            idx = np.argmin(timediffs) # 500 because we need to pick a point AFTER SLAM is initialized
+            if best_t > timediffs[idx]:
+                best_t = timediffs[idx]
+                best_vicon_idx = idx
+                best_slam_i = i
+        
+        print(f"{best_t=}")
+        Transforms.T_cam1_to_world = slam_quat_to_HTM(cam1_vicon[best_vicon_idx, :])
+        T_cam1_to_sorigin = slam_quat_to_HTM(cam1_slam[best_slam_i, :])
+
+        Transforms.T_world_to_sorigin = T_cam1_to_sorigin @ np.linalg.inv(Transforms.T_cam1_to_world)
 
     def slam_tracked_body_to_my_body(T_cam1_to_sorigin): # SLAM quat gives you the transform from cam1 frame to slam origin
         return Transforms.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin
@@ -238,6 +268,7 @@ with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(
 
 ### Apply transforms to the Vicon tracking data of cam1
 
+synth_vicon_json = []
 vicon_json = []
 if args.vicon_available:
     def vicon_tracked_body_to_my_body(T_vcam1_to_world):
@@ -346,8 +377,8 @@ json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
 all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 
 all_data_synthetic = sorted(all_data_synthetic, key=lambda x: x["t"])
 
-json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}.json", 'w'), cls=NumpyEncoder, indent=1)
+json.dump(all_data_synthetic, open(outpath+"/synthetic"+f"/all_synthetic_{args.synth_slam_f}_{args.synth_uwb_f}.json", 'w'), cls=NumpyEncoder, indent=1)
 # So all synthetic files will have a unique name
 
 
-json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synthetic_slam_frequency}_{args.synthetic_uwb_frequency}_meta.json", 'w'), cls=NumpyEncoder, indent=1)
+json.dump(args.__dict__, open(out_synthetic+f"/all_synthetic_{args.synth_slam_f}_{args.synth_uwb_f}_meta.json", 'w'), cls=NumpyEncoder, indent=1)

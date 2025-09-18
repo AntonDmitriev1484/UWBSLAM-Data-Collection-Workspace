@@ -62,9 +62,35 @@ def main():
     z_gt = np.full(N, circle_center[2])
     gt_positions = np.vstack((x_gt, y_gt, z_gt)).T
 
+       # For each measured point, find closest GT point (reuse allowed)
+       # Points are in the wrong order, so instead of sorting and doign the kinematics I'm just going to run the comparison
+       # based on the closest point.
+    matched_gt_positions = np.zeros_like(positions)
+
+    for i, pos in enumerate(positions):
+        dists = np.linalg.norm(gt_positions - pos, axis=1)
+        min_idx = np.argmin(dists)
+        matched_gt_positions[i] = gt_positions[min_idx]
+
+    # Compute error
+    errors = np.linalg.norm(positions - matched_gt_positions, axis=1)
+    mean_err = np.mean(errors)
+    rmse = np.sqrt(np.mean(errors**2))
+
+    print(f"Mean position error vs closest GT point: {mean_err:.4f} m")
+    print(f"RMSE: {rmse:.4f} m")
+
+
+    # # Compute error
+    # errors = np.linalg.norm(positions - matched_gt_positions, axis=1)
+    # mean_err = np.mean(errors)
+    # rmse = np.sqrt(np.mean(errors**2))
+
+    # print(f"Mean position error vs best-matching GT points: {mean_err:.4f} m")
+    # print(f"RMSE: {rmse:.4f} m")
+
     # Compute mean error
     errors = np.linalg.norm(positions - gt_positions, axis=1)
-    print(errors)
     mean_err = np.mean(errors)
     # rmse = np.sqrt(np.mean(np.sum(errors**2)))
     print(f"Mean position error vs perfect circle: {mean_err:.4f} meters")
@@ -72,6 +98,17 @@ def main():
     # Plot measured trajectory
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
+    for i in range(0, N, 25):
+        ax.quiver(
+            matched_gt_positions[i, 0], matched_gt_positions[i, 1], matched_gt_positions[i, 2],
+            positions[i, 0] - matched_gt_positions[i, 0],
+            positions[i, 1] - matched_gt_positions[i, 1],
+            positions[i, 2] - matched_gt_positions[i, 2],
+            color='orange',
+            arrow_length_ratio=0.1,
+            linewidth=1
+        )
+
     ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], label='Measured Trajectory', color='blue')
     ax.scatter(*positions[0], color='green', label='Start')
     ax.scatter(*positions[-1], color='red', label='End')

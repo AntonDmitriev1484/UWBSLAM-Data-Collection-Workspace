@@ -100,7 +100,7 @@ if __name__== "__main__":
 
         if args.accel:
             accel_ts = np.array(accel_ts)
-            accel_vectors = -1 * np.array(accel_vectors)
+            accel_vectors = np.array(accel_vectors)
             for vpose, vts in zip(vicon_poses, vicon_ts):
                 # Find closest accelerometer measurement to pose
                 idx = np.argmin(np.abs(vts -accel_ts))

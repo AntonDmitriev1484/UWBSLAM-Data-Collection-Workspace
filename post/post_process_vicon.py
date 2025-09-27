@@ -185,18 +185,6 @@ with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
 Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
 Transforms.T_cam1_to_body = Transforms.T_imu_to_body @ np.linalg.inv(Transforms.T_imu_to_cam1)
 Transforms.T_body_to_decawave = np.eye(4)
-# Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
-# Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
-
-# So we're going to have two body frame representations in the end.
-# T_world_to_sbody , that is slam and apriltag body frame estimate
-# T_world_to_vbody, that is what vicon reports.
-
-
-
-# Compute T_body_to_decawave by  Body_to_decawave = (Body_in_world_^-1 * Tx_in_world
-# Or just subtract the translation of body and UWBTX in world, and set the rotation to be 0.
-# But body in world needs to be computed from LeftRS in world, because my body frame is at the IMU?
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 

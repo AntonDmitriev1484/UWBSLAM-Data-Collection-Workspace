@@ -89,8 +89,10 @@ if __name__== "__main__":
     # --- Vicon body frame trajectory ---
     if args.vicon and vicon_poses:
         positions_world = []
+        imu_poses = []
         for body_pose in vicon_poses:
             positions_world.append(np.linalg.inv(body_pose)[:3, 3])  # translation
+            imu_poses.append(np.linalg.inv(T_imu_to_body) @ body_pose)
         positions_world = np.array(positions_world)
 
         ax.plot(positions_world[:, 0], positions_world[:, 1], positions_world[:, 2],
@@ -99,17 +101,20 @@ if __name__== "__main__":
         ax.scatter(*positions_world[-1], color='red', marker='^', label='Vicon End')
 
         if args.accel:
+
+            skip = 100
             accel_ts = np.array(accel_ts)
             accel_vectors = np.array(accel_vectors)
-            for vpose, vts in zip(vicon_poses, vicon_ts):
-                # Find closest accelerometer measurement to pose
-                idx = np.argmin(np.abs(vts -accel_ts))
-                # Plot that vector in the world frame
-                accel_vector_imu_frame = accel_vectors[idx] / np.linalg.norm(accel_vectors[idx]) #unit vector
-                accel_vector_world_frame = T_imu_to_body[:3,:3] @ accel_vector_imu_frame # rotate vector into body frame
+            for i, (vpose, vts) in enumerate(zip(vicon_poses, vicon_ts)):
+                if i % skip == 0:
+                    # Find closest accelerometer measurement to pose
+                    idx = np.argmin(np.abs(vts -accel_ts))
+                    # Plot that vector in the world frame
+                    accel_vector_imu_frame = accel_vectors[idx] / np.linalg.norm(accel_vectors[idx]) #unit vector
+                    accel_vector_world_frame = T_imu_to_body[:3,:3] @ accel_vector_imu_frame # rotate vector into body frame
 
-                origin = np.linalg.inv(vpose)[:3,3]
-                ax.quiver(*origin, *accel_vector_world_frame, color='purple', length=0.3 )
+                    origin = np.linalg.inv(vpose)[:3,3]
+                    ax.quiver(*origin, *accel_vector_world_frame, color='purple', length=0.3 )
 
         if args.velocity:
             skip = 100
@@ -120,6 +125,8 @@ if __name__== "__main__":
                     ax.quiver(*origin, *v, color='pink', length=0.3 )
 
         if args.stride > 0:
+            # for i in range (0, len(imu_poses), args.stride):
+            #     draw_axes(ax, imu_poses[i], length=0.4)
             for i in range(0, len(vicon_poses), args.stride):
                 draw_axes(ax, vicon_poses[i], length=0.4)
 

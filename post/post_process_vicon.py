@@ -40,9 +40,16 @@ parser.add_argument("--slam_available", action="store_true") # If we have no orb
 # Since my code is a mess, I'm going to do this by just aliasing the vicon data into the slam arrays.
 
 parser.add_argument("--calibration_file", "-c", type=str)
-parser.add_argument("--crop_start", type=float) # Pass the ROS timestamp that you want to crop away all data before. Data will still be used to compute transforms.
+parser.add_argument("--crop_start", type=float, default=0) # Pass the relative timestamp from startthat you want to crop away all data before. Data will still be used to compute transforms.
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
+
+# def str_to_tuple(s):
+#     print(s)
+#     toop = tuple(map(float, (s.remove("(").remove(")")).split(",")))
+#     print(toop)
+#     return toop
+parser.add_argument("--synth_slam", type=float, nargs=2)
 
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
 parser.add_argument("--synth_uwb_f", default=0, type=int) # interpolate GT to this frequency, so that gtsam_test can use synthetic ranges.
@@ -277,6 +284,72 @@ if args.vicon_available:
             }
         } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
 
+synth_slam_json = []
+if args.synth_slam:
+    print(args.synth_slam)
+
+    vicon_freq = len(vicon_data['LeftRS']) / (END-START)
+    skip = int(vicon_freq / args.synth_slam[0]) # Number of vicon poses to skip in subsampling to synth slam frequency
+
+    # Define error random walk
+    max_t_err = 0.5 # Allowing for at most 15cm trans error
+    max_R_err = 5 # Allowing for at most 5 deg rot error
+
+    t_rw_step = 0.001 # How much error change do we want to see per vicon pose? # 1mm change is at most 10cm drift / s
+    R_rw_step = 0.01
+    t_err = np.zeros(3)
+    R_err = np.eye(3)
+
+    rng = np.random.default_rng(0)
+
+    tracker_data_tum = np.array(vicon_data['LeftRS'])
+    slam_body_poses = [] # Synthetic slam body poses
+    for i in range(tracker_data_tum.shape[0]-1):
+        tracker_pose = slam_quat_to_HTM(tracker_data_tum[i, :])   # tracker pose as HTM
+
+        # Pose of our errored frame, in the current tracker frame. -> Error is applied in the tracker frame.
+        # First translate by t_err, then rotate by R_err
+        # this applies the translation error vector in the tracker coord frame.
+        t_err_transform = np.eye(4)
+        t_err_transform[:3,3] = t_err
+        R_err_transform = np.eye(4)
+        R_err_transform[:3,:3] = R_err
+        error_transform = R_err_transform @ t_err_transform
+
+        # T_world_to_slam = T_world_to_error
+        slam_body_pose =  np.linalg.inv(error_transform) @ np.linalg.inv(tracker_pose) #  T_tracker_to_error @ T_world_to_tracker
+        slam_body_poses.append([tracker_data_tum[i, 0]] + list(slam_body_pose.flatten()))
+
+        # Take the random walk step in our error. 
+        # Clamp t_err and R_err to bounds after step.
+        delta_t = rng.normal(0, t_rw_step, 3) # Generate step from Gauss
+         # We want 0 preturbation along the local z axis. I.e. no forward drift. But the Z-axis will not always be forward!
+        new_t_err = t_err + delta_t # Apply step
+        if np.linalg.norm(new_t_err) <= max_t_err: # Clamp
+            t_err = new_t_err
+
+        delta_rvec = rng.normal(0, np.deg2rad(R_rw_step), 3)  # Generate step from Gauss
+        delta_r = R.from_rotvec(delta_rvec).as_matrix()
+        new_R_err = delta_r @ R_err # Apply step
+        angle = R.from_matrix(new_R_err).magnitude()
+        if angle <= np.deg2rad(max_R_err): # Clamp
+            R_err = new_R_err
+
+    slam_body_poses = np.array(slam_body_poses)
+    slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
+
+        # Convert from nparray to json format
+    # Add Vicon poses to all_data
+
+    print(slam_body_poses[:5])
+    synth_slam_json = [ {
+            "t": float(body_pose[0]),
+            "type": "synth_slam_pose",
+            "T_body_world" : body_pose[1:].reshape((4,4)),
+        } for body_pose in list(slam_body_poses)]
+
+
+
 # If we're using real UWB ranges, but have no compass
 # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
 assisted_uwb_json = []
@@ -303,7 +376,7 @@ infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
 infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
     # Compose the final factor graph dataset
-all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json
+all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_slam_json
 
 # TODO: Compose the final synthetic dataset
 

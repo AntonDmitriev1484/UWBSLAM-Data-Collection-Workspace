@@ -20,6 +20,7 @@ if __name__== "__main__":
     parser = argparse.ArgumentParser(description="Plot trajectory and coordinate transforms from all.json")
     parser.add_argument("trial_name", help="Trial name")
     parser.add_argument("--slam", action="store_true", help="Plot SLAM trajectory if available in all.json") 
+    parser.add_argument("--synth_slam", action="store_true", help="Plot Synthetic SLAM trajectory if available in all.json") 
     #'action' means if flag is present, automatically store true, if absent, store false
     parser.add_argument("--vicon", action="store_true", help="Plot Vicon trajectory if available in all.json")
     parser.add_argument("--vicon_tx", action="store_true", help="Plot Vicon TX Pose trajectory if available in all.json")    
@@ -29,6 +30,8 @@ if __name__== "__main__":
     parser.add_argument("--velocity", action="store_true", help="Display velocity vectors rotated into world frame")
     parser.add_argument("--transforms_json", help="Optional transforms.json file", default=None)
     args = parser.parse_args()
+
+    SHOW_VICON_STRIDE = False
 
     all_json_path = f"../out/{args.trial_name}_post/all.json"
     with open(all_json_path, 'r') as f:
@@ -41,6 +44,7 @@ if __name__== "__main__":
     T_imu_to_body = np.array(Transforms["T_imu_to_body"])
 
     slam_poses = []
+    synth_slam_poses = []
     vicon_poses = []
     vicon_ts = []
     vicon_tx_poses = []
@@ -66,6 +70,8 @@ if __name__== "__main__":
             a_vector = np.array([item["ax"], item["ay"], item["az"]])
             accel_vectors.append(a_vector)  # T_world_to_body
             accel_ts.append(item["t"])
+        if item.get("type") == "synth_slam_pose":
+           synth_slam_poses.append(np.array(item["T_body_world"]))  # T_world_to_body
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -85,6 +91,22 @@ if __name__== "__main__":
         if args.stride > 0:
             for i in range(0, len(slam_poses), args.stride):
                 draw_axes(ax, slam_poses[i], length=0.4)
+
+    # --- Synth SLAM trajectory ---
+    if args.synth_slam and synth_slam_poses:
+        positions_world = []
+        for body_pose in synth_slam_poses:
+            positions_world.append(np.linalg.inv(body_pose)[:3, 3])  # translation
+        positions_world = np.array(positions_world)
+
+        ax.plot(positions_world[:, 0], positions_world[:, 1], positions_world[:, 2],
+                label='Synth SLAM Body Trajectory', color='blue')
+        ax.scatter(*positions_world[0], color='green', label='SLAM Start')
+        ax.scatter(*positions_world[-1], color='red', label='SLAM End')
+
+        if args.stride > 0:
+            for i in range(0, len(synth_slam_poses), args.stride):
+                draw_axes(ax, synth_slam_poses[i], length=0.4)
 
     # --- Vicon body frame trajectory ---
     if args.vicon and vicon_poses:
@@ -119,7 +141,7 @@ if __name__== "__main__":
                     origin = np.linalg.inv(vpose)[:3,3]
                     ax.quiver(*origin, *v, color='pink', length=0.3 )
 
-        if args.stride > 0:
+        if args.stride > 0 and SHOW_VICON_STRIDE:
             for i in range(0, len(vicon_poses), args.stride):
                 draw_axes(ax, vicon_poses[i], length=0.4)
 
@@ -135,7 +157,7 @@ if __name__== "__main__":
         ax.scatter(*positions_world[0], color='green', marker='^', label='Vicon Start')
         ax.scatter(*positions_world[-1], color='red', marker='^', label='Vicon End')
 
-        if args.stride > 0:
+        if args.stride > 0 and SHOW_VICON_STRIDE:
             for i in range(0, len(vicon_tx_poses), args.stride):
                 draw_axes(ax, vicon_tx_poses[i], length=0.4) 
 

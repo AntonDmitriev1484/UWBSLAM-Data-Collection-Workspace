@@ -292,10 +292,10 @@ if args.synth_slam:
     skip = int(vicon_freq / args.synth_slam[0]) # Number of vicon poses to skip in subsampling to synth slam frequency
 
     # Define error random walk
-    max_t_err = 0.5 # Allowing for at most 15cm trans error
+    max_t_err = 0.15 # Allowing for at most 15cm trans error
     max_R_err = 5 # Allowing for at most 5 deg rot error
 
-    t_rw_step = 0.001 # How much error change do we want to see per vicon pose? # 1mm change is at most 10cm drift / s
+    t_rw_step = 0.005 # How much error change do we want to see per vicon pose? # 1mm change is at most 10cm drift / s
     R_rw_step = 0.01
     t_err = np.zeros(3)
     R_err = np.eye(3)
@@ -304,21 +304,11 @@ if args.synth_slam:
 
     tracker_data_tum = np.array(vicon_data['LeftRS'])
     slam_body_poses = [] # Synthetic slam body poses
+
+    # First generate all of the error vectors
+    t_err_ = []
+    R_err_ = []
     for i in range(tracker_data_tum.shape[0]-1):
-        tracker_pose = slam_quat_to_HTM(tracker_data_tum[i, :])   # tracker pose as HTM
-
-        # Pose of our errored frame, in the current tracker frame. -> Error is applied in the tracker frame.
-        # First translate by t_err, then rotate by R_err
-        # this applies the translation error vector in the tracker coord frame.
-        t_err_transform = np.eye(4)
-        t_err_transform[:3,3] = t_err
-        R_err_transform = np.eye(4)
-        R_err_transform[:3,:3] = R_err
-        error_transform = R_err_transform @ t_err_transform
-
-        # T_world_to_slam = T_world_to_error
-        slam_body_pose =  np.linalg.inv(error_transform) @ np.linalg.inv(tracker_pose) #  T_tracker_to_error @ T_world_to_tracker
-        slam_body_poses.append([tracker_data_tum[i, 0]] + list(slam_body_pose.flatten()))
 
         # Take the random walk step in our error. 
         # Clamp t_err and R_err to bounds after step.
@@ -328,12 +318,51 @@ if args.synth_slam:
         if np.linalg.norm(new_t_err) <= max_t_err: # Clamp
             t_err = new_t_err
 
+        # print(f"{t_err=} {delta_t=}")
+
         delta_rvec = rng.normal(0, np.deg2rad(R_rw_step), 3)  # Generate step from Gauss
         delta_r = R.from_rotvec(delta_rvec).as_matrix()
         new_R_err = delta_r @ R_err # Apply step
         angle = R.from_matrix(new_R_err).magnitude()
         if angle <= np.deg2rad(max_R_err): # Clamp
             R_err = new_R_err
+
+        t_err_.append(t_err)
+        R_err_.append(R_err)
+
+    # Smooth over translation error
+    t_err_ = np.array(t_err_)
+    R_err_ = np.array(R_err_)
+
+
+    print(f"{t_err_.shape=} {R_err_.shape=}")
+
+    window = 25
+    cumsum = np.cumsum(t_err_, axis = 0) 
+    t_err_ = (cumsum[window:] - cumsum[:-window]) / float(window)
+    R_err_ = R_err_[window:]
+
+
+    print(f"{t_err_.shape=} {R_err_.shape=}")
+
+    # Apply error vectors
+    for j in range(t_err_.shape[0]):
+
+        # Pose of our errored frame, in the current tracker frame. -> Error is applied in the tracker frame.
+        # First translate by t_err, then rotate by R_err
+        # this applies the translation error vector in the tracker coord frame.
+
+        t_err_transform = np.eye(4)
+        t_err_transform[:3,3] = t_err_[j]
+        R_err_transform = np.eye(4)
+        R_err_transform[:3,:3] = R_err_[j]
+        error_transform = R_err_transform @ t_err_transform
+
+        tracker_pose = slam_quat_to_HTM(tracker_data_tum[j, :])   # tracker pose as HTM
+
+        # T_world_to_slam = T_world_to_error
+        slam_body_pose =  np.linalg.inv(error_transform) @ np.linalg.inv(tracker_pose) #  T_tracker_to_error @ T_world_to_tracker
+        slam_body_poses.append([tracker_data_tum[i, 0]] + list(slam_body_pose.flatten()))
 
     slam_body_poses = np.array(slam_body_poses)
     slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency

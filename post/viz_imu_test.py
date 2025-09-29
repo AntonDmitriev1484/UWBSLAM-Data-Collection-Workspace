@@ -13,7 +13,6 @@ import os
 import json
 import argparse
 
-import cv2
 import numpy as np
 
 import matplotlib.pyplot as plt
@@ -24,15 +23,15 @@ parser.add_argument("--trial_name" , "-t", type=str)
 args = parser.parse_args()
 
 
-outpath = f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}_post'
-out_rgb = f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}_post/rgb'
-out_depth = f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}_post/depth'
+# outpath = f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}_post'
+# out_rgb = f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}_post/rgb'
+# out_depth = f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}_post/depth'
 
-os.makedirs(outpath, exist_ok=True)
-os.makedirs(out_rgb, exist_ok=True)
-os.makedirs(out_depth, exist_ok=True)
+# os.makedirs(outpath, exist_ok=True)
+# os.makedirs(out_rgb, exist_ok=True)
+# os.makedirs(out_depth, exist_ok=True)
 
-bagpath = Path(f'/home/admi3ev/ROS-Realsense-Decawave-Collector/{args.trial_name}')
+bagpath = Path(f'/home/admi3ev/ws/collect/ros2/{args.trial_name}')
 
 add_types = {}
 

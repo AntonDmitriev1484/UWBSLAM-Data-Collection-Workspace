@@ -1,4 +1,4 @@
 imu_topic: "/camera/camera/imu"
 imu_rate: 200
 measure_rate: 200
-sequence_time: 10800
+sequence_time: 18000

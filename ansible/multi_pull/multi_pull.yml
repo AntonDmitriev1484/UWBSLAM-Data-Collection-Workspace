@@ -1,0 +1,100 @@
+---
+- name: Download one or more files or directories from remote to local
+  hosts: DataNUCs
+  vars:
+    file_paths: []     # e.g., ["collect/ros1/file1.bag", "collect/ros1/dir1"]
+    dir: false         # set to true if pulling directories
+    multi: false       # set to true if pulling the same trial off of multiple users
+    basename: ""       # optional override for the destination basename
+    local_user: "antond2"  # user that should own created directories
+
+  tasks:
+    # -------------------- FILES --------------------
+
+    - name: Ensure local parent directory exists (files, single-host layout)
+      when: not dir and not multi
+      delegate_to: localhost
+      become: true
+      file:
+        path: "/home/antond2/ws/{{ item | dirname }}"
+        state: directory
+        recurse: yes
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: "0755"
+      loop: "{{ file_paths }}"
+
+    - name: Download files using fetch (non-recursive, single-host layout)
+      when: not dir and not multi
+      fetch:
+        src: "/home/admi3ev/ws/{{ item }}"
+        dest: "/home/antond2/ws/{{ item | dirname }}/{{ basename | default(item | basename, true) }}"
+        flat: yes
+      loop: "{{ file_paths }}"
+
+    - name: Ensure local parent directory exists (files, multi-host layout)
+      when: not dir and multi
+      delegate_to: localhost
+      become: true
+      file:
+        path: "/home/antond2/ws/{{ item }}/{{ inventory_hostname }}"
+        state: directory
+        recurse: yes
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: "0755"
+      loop: "{{ file_paths }}"
+
+    - name: Download files using fetch (non-recursive, multi-host layout)
+      when: not dir and multi
+      fetch:
+        src: "/home/admi3ev/ws/{{ item }}"
+        dest: "/home/antond2/ws/{{ item }}/{{ inventory_hostname }}/{{ basename | default(item | basename, true) }}"
+        flat: yes
+      loop: "{{ file_paths }}"
+
+    # -------------------- DIRECTORIES --------------------
+
+    - name: Ensure local parent directory exists (directories, single-host layout)
+      when: dir and not multi
+      delegate_to: localhost
+      become: true
+      file:
+        path: "/home/antond2/ws/{{ item | dirname }}"
+        state: directory
+        recurse: yes
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: "0755"
+      loop: "{{ file_paths }}"
+
+    - name: Download directories using synchronize (recursive, single-host layout)
+      when: dir and not multi
+      synchronize:
+        src: "/home/admi3ev/ws/{{ item }}/"
+        dest: "/home/antond2/ws/{{ item | dirname }}/{{ basename | default(item | basename, true) }}"
+        mode: pull
+        recursive: yes
+      loop: "{{ file_paths }}"
+
+    - name: Ensure local parent directory exists (directories, multi-host layout)
+      when: dir and multi
+      delegate_to: localhost
+      become: true
+      file:
+        path: "/home/antond2/ws/{{ item }}/{{ inventory_hostname }}"
+        state: directory
+        recurse: yes
+        owner: "{{ local_user }}"
+        group: "{{ local_user }}"
+        mode: "0755"
+      loop: "{{ file_paths }}"
+
+    - name: Download directories using synchronize (recursive, multi-host layout)
+      when: dir and multi
+      synchronize:
+        src: "/home/admi3ev/ws/{{ item }}/"
+        dest: "/home/antond2/ws/{{ item }}/{{ inventory_hostname }}/{{ basename | default(item | basename, true) }}"
+        mode: pull
+        recursive: yes
+      loop: "{{ file_paths }}"

@@ -144,7 +144,7 @@ print(f"Data start {START} cropped to {args.crop_start}")
 
 vicon_data = crop_vicon(vicon_data, START, END)
 
-mobile_objects = ["LeftRS", "UWB1"]
+mobile_objects = ["LeftRS2"]
 vicon_data = clean_vicon(vicon_data)
 
 # Need to adjust vicon data to actual timestamps instead of just frame indices
@@ -170,9 +170,10 @@ Transforms.T_vuwb1_to_vcam1 = np.array([])
 Transforms.T_vuwb_to_uwbtx = np.eye(4) # Probably better to express as a vector in the vUWB frame
 Transforms.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
-#Transform from vicon marker to the center of an Apriltag
-# I manually selected the center of the apriltag to define the vicon frame
-Transforms.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
+if args.slam_available:
+    #Transform from vicon marker to the center of an Apriltag
+    # I manually selected the center of the apriltag to define the vicon frame
+    Transforms.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
 
 # Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
 
@@ -185,7 +186,12 @@ Transforms.T_imu_to_body = np.array([
                                         [0, -1, 0, 0],
                                         [0, 0, 0, 1]
                                     ])
-
+Transforms.T_vcam1_to_cam1 = np.array([
+                                        [ 0, -1, 0, 0],
+                                        [0, 0, -1, -0.03],
+                                        [1, 0, 0, 0],
+                                        [0, 0, 0, 1]
+                                        ])
 Transforms.T_body_to_imu = np.linalg.inv(Transforms.T_imu_to_body)
 
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
@@ -213,7 +219,7 @@ if args.slam_available:
     else:
         # Find the closest Vicon pose to the SLAM origin
         cam1_slam =slam_data # Cam1 w.r.t SLAM origin
-        cam1_vicon = np.array(vicon_data["LeftRS"]) # Cam1 w.r.t vicon world origin
+        cam1_vicon = np.array(vicon_data["LeftRS2"]) # Cam1 w.r.t vicon world origin
 
         # Pick the pose for alignment based of the best timestamp sync
         best_t = np.inf
@@ -268,8 +274,9 @@ vicon_json = []
 if args.vicon_available:
     def vicon_tracked_body_to_my_body(T_vcam1_to_world):
         # By default, vicon pose tracking gives you the T_vcam1_to_world
-        return Transforms.T_cam1_to_body @ np.linalg.inv(T_vcam1_to_world)
-    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]))
+        return Transforms.T_cam1_to_body @ Transforms.T_vcam1_to_cam1 @ np.linalg.inv(T_vcam1_to_world)
+
+    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS2"]))
 
     # Convert from nparray to json format
     # Add Vicon poses to all_data
@@ -288,7 +295,7 @@ synth_slam_json = []
 if args.synth_slam:
     print(args.synth_slam)
 
-    vicon_freq = len(vicon_data['LeftRS']) / (END-START)
+    vicon_freq = len(vicon_data['LeftRS2']) / (END-START)
     skip = int(vicon_freq / args.synth_slam[0]) # Number of vicon poses to skip in subsampling to synth slam frequency
 
     # Define error random walk
@@ -302,7 +309,7 @@ if args.synth_slam:
 
     rng = np.random.default_rng(0)
 
-    tracker_data_tum = np.array(vicon_data['LeftRS'])
+    tracker_data_tum = np.array(vicon_data['LeftRS2'])
     slam_body_poses = [] # Synthetic slam body poses
 
     # First generate all of the error vectors
@@ -383,7 +390,7 @@ if args.synth_slam:
 # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
 assisted_uwb_json = []
 if args.map_vicon_to_uwb:
-    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]), 100)
+    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS2"]), 100)
 
 vicon_uwbtx_json = []
 if args.include_vicon_tx_pose:
@@ -456,7 +463,7 @@ with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), 
 # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
 print("Checking frequency of real data")
 print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-print(f" Measured vicon frequency {len(vicon_data['LeftRS']) / (END-START)}")
+print(f" Measured vicon frequency {len(vicon_data['LeftRS2']) / (END-START)}")
 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
 all_data = filtt(all_data)

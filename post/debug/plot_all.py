@@ -34,7 +34,7 @@ if __name__== "__main__":
     parser.add_argument("--transforms_json", help="Optional transforms.json file", default=None)
     args = parser.parse_args()
 
-    SHOW_VICON_STRIDE = False
+    SHOW_VICON_STRIDE = True
 
     all_json_path = f"../out/{args.trial_name}_post/all.json"
     with open(all_json_path, 'r') as f:

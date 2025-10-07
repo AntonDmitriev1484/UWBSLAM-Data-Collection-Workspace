@@ -1,0 +1,32 @@
+rosbag2_bagfile_information:
+  version: 5
+  storage_identifier: sqlite3
+  duration:
+    nanoseconds: 59433794107
+  starting_time:
+    nanoseconds_since_epoch: 1759345550532169522
+  message_count: 17646
+  topics_with_message_count:
+    - topic_metadata:
+        name: /imu0
+        type: sensor_msgs/msg/Imu
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 11878
+    - topic_metadata:
+        name: /vicon/firefly_sbx/firefly_sbx
+        type: geometry_msgs/msg/PoseStamped
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 5768
+  compression_format: ""
+  compression_mode: ""
+  relative_file_paths:
+    - irl4_free_together_0.db3
+  files:
+    - path: irl4_free_together_0.db3
+      starting_time:
+        nanoseconds_since_epoch: 1759345550532169522
+      duration:
+        nanoseconds: 59433794107
+      message_count: 17646

@@ -59,6 +59,7 @@ parser.add_argument("--synth_vicon_f", default=0, type=int)
 parser.add_argument("--map_vicon_to_uwb", action="store_true")
 parser.add_argument("--include_vicon_tx_pose", action="store_true")
 parser.add_argument("--vicon_for_worldframing", action="store_true") 
+parser.add_argument("--force_downwards_accel", action="store_true")
 # Instead of using AprilTag detection to convert SLAM to world frame, use Vicon.
 # This lets us see a trajectory with just SLAM error, instead of SLAM + AprilTag error
 
@@ -290,6 +291,66 @@ if args.vicon_available:
                     "vz": float(body_v[3])
             }
         } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
+    
+if args.force_downwards_accel:
+
+    def rotate_into_plane(a_imu, g_imu):
+        a_imu = np.asarray(a_imu, dtype=float)
+        g_imu = np.asarray(g_imu, dtype=float)
+        x_axis = np.array([1.0, 0.0, 0.0])
+
+        # Normal of the plane (span of g_imu and x_axis)
+        n = np.cross(g_imu, x_axis)
+        n /= np.linalg.norm(n)
+
+        # Projection of a_imu onto plane
+        a_proj = a_imu - np.dot(a_imu, n) * n
+
+        # Build a rotation matrix mapping a_imu -> a_proj
+        v1 = a_imu / np.linalg.norm(a_imu)
+        v2 = a_proj / np.linalg.norm(a_proj)
+
+        axis = np.cross(v1, v2)
+        if np.linalg.norm(axis) < 1e-9:  # already in plane
+            return a_imu, np.eye(3)
+
+        axis /= np.linalg.norm(axis)
+        angle = np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
+
+        rot = R.from_rotvec(axis * angle).as_matrix()
+        a_rot = rot @ a_imu
+
+        return a_rot, rot
+
+    # For los_walking, we know our main acceleration component should be along +x body frame
+    new_imu = []
+    for imu in imu_json:
+
+        accel_ts = imu["t"]
+        a_imu = np.array([imu["ax"], imu["ay"], imu["az"]])
+        
+        vwf = np.array(vicon_data["LeftRS2"])
+        idx = np.argmin(np.abs(vwf[:,0] - accel_ts)) 
+        # find closest vicon pose, there's about 2 vicon poses per accel vector, so we shouldn't need to interpolate
+
+        T_vcam1_to_world = slam_quat_to_HTM(vwf[idx, :])
+
+        T_world_to_imu = np.linalg.inv(Transforms.T_imu_to_cam1 ) @ Transforms.T_vcam1_to_cam1 @ np.linalg.inv(T_vcam1_to_world)
+
+        g_world = np.array([0, 0, 9.81])
+        g_imu = T_world_to_imu[:3,:3] @ g_world
+
+        # Rotation about IMU frame X-axis, should get us there.
+
+        a_correct, _ = rotate_into_plane(a_imu, g_imu)
+
+        imu["ax"] = a_correct[0]
+        imu["ay"] = a_correct[1]
+        imu["az"] = a_correct[2]
+        nimu = imu
+        new_imu.append(nimu)
+
+    imu_json = new_imu
 
 synth_slam_json = []
 if args.synth_slam:

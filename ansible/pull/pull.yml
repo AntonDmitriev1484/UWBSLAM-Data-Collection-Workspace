@@ -1,20 +1,85 @@
+# ---
+# - name: Download one or more files or directories from remote to local
+#   hosts: DataNUCs
+#   vars:
+#     file_paths: []     # e.g., ["collect/ros1/file1.bag", "collect/ros1/dir1"]
+#     dir: false         # set to true if pulling directories
+#     remote_host: ""    # optional: set to inventory_hostname of the single host you want to pull from
+
+#     # Example use:
+#     # ansible-playbook pull.yml \
+#     # -e 'file_paths=["collect/ros1/dir1","collect/ros1/dir2"]' \
+#     # -e 'dir=true' \
+#     # -e 'remote_host=nuc2'   # <- only pull from host with inventory_hostname == nuc2
+
+#   tasks:
+#     - name: Download files using fetch (non-recursive)
+#       when: not dir and (remote_host == "" or inventory_hostname == remote_host)
+#       fetch:
+#         src: "/home/admi3ev/ws/{{ item }}"
+#         dest: "/home/antond2/ws/{{ item }}"
+#         flat: yes
+#       loop: "{{ file_paths }}"
+#       delegate_to: localhost
+
+#     - name: Download directories using synchronize (recursive)
+#       when: dir and (remote_host == "" or inventory_hostname == remote_host)
+#       synchronize:
+#         src: "/home/admi3ev/ws/{{ item }}/"
+#         dest: "/home/antond2/ws/{{ item }}"
+#         mode: pull
+#         recursive: yes
+#       loop: "{{ file_paths }}"
+#       delegate_to: localhost
+# ---
+# - name: Download one or more files or directories from remote to local
+#   hosts: DataNUCs
+#   vars:
+#     file_paths: []     # e.g., ["collect/ros1/file1.bag", "collect/ros1/dir1"]
+#     dir: false         # set to true if pulling directories
+#     remote_host: ""    # optional: set to inventory_hostname of the single host you want to pull from
+
+#     # Example use:
+#     # ansible-playbook pull.yml \
+#     # -e 'file_paths=["collect/ros1/dir1","collect/ros1/dir2"]' \
+#     # -e 'dir=true' \
+#     # -e 'remote_host=nuc2'   # <- only pull from host with inventory_hostname == nuc2
+
+#   tasks:
+#     - name: Download files using fetch (non-recursive)
+#       when: not dir and (remote_host == "" or inventory_hostname == remote_host)
+#       fetch:
+#         src: "/home/admi3ev/ws/{{ item }}"
+#         dest: "/home/antond2/ws/{{ item }}"
+#         flat: yes
+#       loop: "{{ file_paths }}"
+
+#     - name: Download directories using synchronize (recursive)
+#       when: dir and (remote_host == "" or inventory_hostname == remote_host)
+#       synchronize:
+#         src: "/home/admi3ev/ws/{{ item }}/"
+#         dest: "/home/antond2/ws/{{ item }}"
+#         mode: pull
+#         recursive: yes
+#       loop: "{{ file_paths }}"
+
 ---
 - name: Download one or more files or directories from remote to local
   hosts: DataNUCs
   vars:
     file_paths: []     # e.g., ["collect/ros1/file1.bag", "collect/ros1/dir1"]
-    dir: false         # set to true if pulling directories
-    remote_host: ""    # optional: set to inventory_hostname of the single host you want to pull from
+    dir: false   # set to true if pulling directories
+
 
     # Example use:
     # ansible-playbook pull.yml \
     # -e 'file_paths=["collect/ros1/dir1","collect/ros1/dir2"]' \
-    # -e 'dir=true' \
-    # -e 'remote_host=nuc2'   # <- only pull from host with inventory_hostname == nuc2
+    # -e 'dir=true' # <- just leave this option off if you're not pulling a directory
+
 
   tasks:
     - name: Download files using fetch (non-recursive)
-      when: not dir and (remote_host == "" or inventory_hostname == remote_host)
+      when: not dir
       fetch:
         src: "/home/admi3ev/ws/{{ item }}"
         dest: "/home/antond2/ws/{{ item }}"
@@ -22,7 +87,7 @@
       loop: "{{ file_paths }}"
 
     - name: Download directories using synchronize (recursive)
-      when: dir and (remote_host == "" or inventory_hostname == remote_host)
+      when: dir
       synchronize:
         src: "/home/admi3ev/ws/{{ item }}/"
         dest: "/home/antond2/ws/{{ item }}"

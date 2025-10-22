@@ -112,7 +112,9 @@ def aggregate_uwb(topic_to_processing, uwb_csv, uwb_range_distribution):
 def aggregate_imu(topic_to_processing, imu_csv):
     for j in topic_to_processing['/camera/camera/imu'][1]:
         csv_row = []
-        for k, v in j.items(): csv_row.append(v)
+        for k, v in j.items():
+            if k != "type":
+                csv_row.append(v)
         imu_csv.append(csv_row)
     
     return topic_to_processing['/camera/camera/imu'][1]

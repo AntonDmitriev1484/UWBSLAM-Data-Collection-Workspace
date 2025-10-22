@@ -58,8 +58,7 @@ parser.add_argument("--synth_vicon_f", default=0, type=int)
 
 parser.add_argument("--map_vicon_to_uwb", action="store_true")
 parser.add_argument("--include_vicon_tx_pose", action="store_true")
-parser.add_argument("--vicon_for_worldframing", action="store_true") 
-parser.add_argument("--force_downwards_accel", action="store_true")
+parser.add_argument("--vicon_for_worldframing", action="store_true")
 # Instead of using AprilTag detection to convert SLAM to world frame, use Vicon.
 # This lets us see a trajectory with just SLAM error, instead of SLAM + AprilTag error
 
@@ -89,7 +88,8 @@ in_anchors = f"../world/{args.anchors_file}"
 
 bagpath = Path(f'../collect/ros2/{args.trial_name}')
 
-vicon_data = parse_vicon_csv(in_vicon) # TODO: Write a parsing function for the vicon files
+if args.vicon_available:
+    vicon_data = parse_vicon_csv(in_vicon)
 
 # headset_data contains the pose of the marker I had on the decawave antenna in the world frame.
 
@@ -143,10 +143,11 @@ args.crop_start += START
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
-vicon_data = crop_vicon(vicon_data, START, END)
-
-mobile_objects = ["LeftRS2"]
-vicon_data = clean_vicon(vicon_data)
+RS_VICON_NAME = "LeftRS" # Or "LeftRS2"
+if args.vicon_available:
+    vicon_data = crop_vicon(vicon_data, START, END)
+    mobile_objects = [RS_VICON_NAME]
+    vicon_data = clean_vicon(vicon_data)
 
 # Need to adjust vicon data to actual timestamps instead of just frame indices
 
@@ -181,18 +182,20 @@ if args.slam_available:
 # The SLAM tracked body is the left camera.
 # Is my body frame defined as the IMU?
 # My body frame is Z-up, X-right, Y-forward
-Transforms.T_imu_to_body = np.array([
-                                        [1, 0, 0, 0],
-                                        [0, 0, 1, 0],
-                                        [0, -1, 0, 0],
-                                        [0, 0, 0, 1]
-                                    ])
-Transforms.T_vcam1_to_cam1 = np.array([
-                                        [ 0, -1, 0, 0],
-                                        [0, 0, -1, -0.03],
-                                        [1, 0, 0, 0],
-                                        [0, 0, 0, 1]
-                                        ])
+# Transforms.T_imu_to_body = np.array([
+#                                         [1, 0, 0, 0],
+#                                         [0, 0, 1, 0],
+#                                         [0, -1, 0, 0],
+#                                         [0, 0, 0, 1]
+#                                     ])
+Transforms.T_imu_to_body = np.eye(4) # For irl3
+# Transforms.T_vcam1_to_cam1 = np.array([
+#                                         [ 0, -1, 0, 0],
+#                                         [0, 0, -1, -0.03],
+#                                         [1, 0, 0, 0],
+#                                         [0, 0, 0, 1]
+#                                         ]) #For irl4
+Transforms.T_vcam1_to_cam1 = np.eye(4)
 Transforms.T_body_to_imu = np.linalg.inv(Transforms.T_imu_to_body)
 
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
@@ -220,7 +223,7 @@ if args.slam_available:
     else:
         # Find the closest Vicon pose to the SLAM origin
         cam1_slam =slam_data # Cam1 w.r.t SLAM origin
-        cam1_vicon = np.array(vicon_data["LeftRS2"]) # Cam1 w.r.t vicon world origin
+        cam1_vicon = np.array(vicon_data[RS_VICON_NAME]) # Cam1 w.r.t vicon world origin
 
         # Pick the pose for alignment based of the best timestamp sync
         best_t = np.inf
@@ -268,6 +271,27 @@ imu_csv = []
 imu_json = aggregate_imu(topic_to_processing, imu_csv)
 with open(f'{out_ml}/imu_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(imu_csv))
 
+# Compute accelerometer bias prior
+imu = np.array(imu_csv)
+accel_mag = np.linalg.norm(imu[:,1:4], axis=1)
+window_size = 100
+std_threshold = 0.05 # Select the threshold at which we determine motion to be higher than the base noise in the IMU
+# This seems to work for realsense2
+interval_end = 0 # Assume recording starts with nodes stationary
+for i in range(0, imu.shape[0]-window_size):
+    std_mag = np.std(accel_mag[i:i+window_size])
+    if std_mag > std_threshold:
+        interval_end = i
+        break
+interval_end_tstp = imu[interval_end, 0]
+imu_stationary = imu[(START < imu[:,0]) & (imu[:,0] < interval_end_tstp)]
+accel_bias = np.average(imu_stationary[:, 1:4], axis=0) + np.array([0,9.81, 0]) # Assumes realsense is gravity aligned during calibration
+
+priors = {"accel_bias":accel_bias, "gyro_bias":np.array([0,0,0]), "velocity":np.array([0,0,0])}
+
+print(f"{imu[interval_end, 0]-START}s stationary IMU window detected from {START} - {imu[interval_end, 0]}")
+
+
 ### Apply transforms to the Vicon tracking data of cam1
 
 synth_vicon_json = []
@@ -277,7 +301,7 @@ if args.vicon_available:
         # By default, vicon pose tracking gives you the T_vcam1_to_world
         return Transforms.T_cam1_to_body @ Transforms.T_vcam1_to_cam1 @ np.linalg.inv(T_vcam1_to_world)
 
-    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS2"]))
+    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data[RS_VICON_NAME]))
 
     # Convert from nparray to json format
     # Add Vicon poses to all_data
@@ -291,72 +315,12 @@ if args.vicon_available:
                     "vz": float(body_v[3])
             }
         } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
-    
-if args.force_downwards_accel:
-
-    def rotate_into_plane(a_imu, g_imu):
-        a_imu = np.asarray(a_imu, dtype=float)
-        g_imu = np.asarray(g_imu, dtype=float)
-        x_axis = np.array([1.0, 0.0, 0.0])
-
-        # Normal of the plane (span of g_imu and x_axis)
-        n = np.cross(g_imu, x_axis)
-        n /= np.linalg.norm(n)
-
-        # Projection of a_imu onto plane
-        a_proj = a_imu - np.dot(a_imu, n) * n
-
-        # Build a rotation matrix mapping a_imu -> a_proj
-        v1 = a_imu / np.linalg.norm(a_imu)
-        v2 = a_proj / np.linalg.norm(a_proj)
-
-        axis = np.cross(v1, v2)
-        if np.linalg.norm(axis) < 1e-9:  # already in plane
-            return a_imu, np.eye(3)
-
-        axis /= np.linalg.norm(axis)
-        angle = np.arccos(np.clip(np.dot(v1, v2), -1.0, 1.0))
-
-        rot = R.from_rotvec(axis * angle).as_matrix()
-        a_rot = rot @ a_imu
-
-        return a_rot, rot
-
-    # For los_walking, we know our main acceleration component should be along +x body frame
-    new_imu = []
-    for imu in imu_json:
-
-        accel_ts = imu["t"]
-        a_imu = np.array([imu["ax"], imu["ay"], imu["az"]])
-        
-        vwf = np.array(vicon_data["LeftRS2"])
-        idx = np.argmin(np.abs(vwf[:,0] - accel_ts)) 
-        # find closest vicon pose, there's about 2 vicon poses per accel vector, so we shouldn't need to interpolate
-
-        T_vcam1_to_world = slam_quat_to_HTM(vwf[idx, :])
-
-        T_world_to_imu = np.linalg.inv(Transforms.T_imu_to_cam1 ) @ Transforms.T_vcam1_to_cam1 @ np.linalg.inv(T_vcam1_to_world)
-
-        g_world = np.array([0, 0, 9.81])
-        g_imu = T_world_to_imu[:3,:3] @ g_world
-
-        # Rotation about IMU frame X-axis, should get us there.
-
-        a_correct, _ = rotate_into_plane(a_imu, g_imu)
-
-        imu["ax"] = a_correct[0]
-        imu["ay"] = a_correct[1]
-        imu["az"] = a_correct[2]
-        nimu = imu
-        new_imu.append(nimu)
-
-    imu_json = new_imu
 
 synth_slam_json = []
 if args.synth_slam:
     print(args.synth_slam)
 
-    vicon_freq = len(vicon_data['LeftRS2']) / (END-START)
+    vicon_freq = len(vicon_data[RS_VICON_NAME]) / (END-START)
     skip = int(vicon_freq / args.synth_slam[0]) # Number of vicon poses to skip in subsampling to synth slam frequency
 
     # Define error random walk
@@ -370,7 +334,7 @@ if args.synth_slam:
 
     rng = np.random.default_rng(0)
 
-    tracker_data_tum = np.array(vicon_data['LeftRS2'])
+    tracker_data_tum = np.array(vicon_data[RS_VICON_NAME])
     slam_body_poses = [] # Synthetic slam body poses
 
     # First generate all of the error vectors
@@ -451,7 +415,7 @@ if args.synth_slam:
 # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
 assisted_uwb_json = []
 if args.map_vicon_to_uwb:
-    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS2"]), 100)
+    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data[RS_VICON_NAME]), 100)
 
 vicon_uwbtx_json = []
 if args.include_vicon_tx_pose:
@@ -492,44 +456,46 @@ class NumpyEncoder(json.JSONEncoder):
 
 ### Copy all world information: transforms, anchors, apriltags, to output
 
-# Use Vicon information to compute the world frame for our tags and anchors
-world_frame_anchors = []
-world_frame_tags = {}
-for tracked_name, data in vicon_data.items():
-    if "UWB" in tracked_name and tracked_name not in mobile_objects:
-        # Compute the tx point over all poses, then average them.
-        uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
-        world_frame_anchors.append({
-            "ID": tracked_name.replace("UWB", ""),
-            "position": uwb_tx_position
-        })
-    if "April" in tracked_name:
-        # Just dump the first transform for that tag in
-        world_frame_tags[tracked_name.replace("April","")] = slam_quat_to_HTM(data[0])[1:]
+if args.vicon_available:
+    # Use Vicon information to compute the world frame for our tags and anchors
+    world_frame_anchors = []
+    world_frame_tags = {}
+    for tracked_name, data in vicon_data.items():
+        if "UWB" in tracked_name and tracked_name not in mobile_objects:
+            # Compute the tx point over all poses, then average them.
+            uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
+            world_frame_anchors.append({
+                "ID": tracked_name.replace("UWB", ""),
+                "position": uwb_tx_position
+            })
+        if "April" in tracked_name:
+            # Just dump the first transform for that tag in
+            world_frame_tags[tracked_name.replace("April","")] = slam_quat_to_HTM(data[0])[1:]
 
-out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
-json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
-out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
-json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
+    out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
+    json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
+    out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
+    json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
 
-
-out_tags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
-json.dump(world_frame_tags, out_tags, cls=NumpyEncoder, indent=1)
-out_tags_trial = open(f'{outpath}/apriltags.json', 'w')
-json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
+    out_tags = open(f'{out_world}/apriltags_{args.trial_name}.json', 'w')
+    json.dump(world_frame_tags, out_tags, cls=NumpyEncoder, indent=1)
+    out_tags_trial = open(f'{outpath}/apriltags.json', 'w')
+    json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
 
 
 with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
 
 # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
-print("Checking frequency of real data")
-print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-print(f" Measured vicon frequency {len(vicon_data['LeftRS2']) / (END-START)}")
+if args.vicon_available:
+    print("Checking frequency of real data")
+    print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
+    print(f" Measured vicon frequency {len(vicon_data[RS_VICON_NAME]) / (END-START)}")
 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
 all_data = filtt(all_data)
 all_data = sorted(all_data, key=lambda x: x["t"])
 json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
+json.dump(priors, open(outpath+"/priors.json", 'w'), cls=NumpyEncoder, indent=1)
 
 # All data synthetic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))
 all_data_synthetic = filtt( [a for a in all_data if not a["type"] == "slam_pose"] + all_data_synthetic) 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import copy
 from pathlib import Path
 
 def main():
@@ -36,7 +37,6 @@ def main():
             tagged_data = []
             for d in data:
                 tagged = d
-                print(d)
                 tagged["src"] = nuc_number
                 tagged_data.append(tagged)
                 
@@ -46,7 +46,17 @@ def main():
     final_all_json = []
     for nuc, arr in nuc_json_map.items():
         final_all_json = final_all_json + arr
-    final_all_json = list(sorted(final_all_json, key=lambda mes: mes["t"]))
+
+    mirrored_uwb = []
+    for mes in final_all_json:
+        if mes["type"] == "uwb":
+            print(mes)
+            mes_copy = copy.deepcopy(mes)
+            mes_copy["src"] = mes["id"]
+            mes_copy["id"] = mes["src"]
+            mirrored_uwb.append(mes_copy)
+
+    final_all_json = list(sorted(final_all_json + mirrored_uwb, key=lambda mes: mes["t"]))
 
     class NumpyEncoder(json.JSONEncoder):
         def default(self, obj):

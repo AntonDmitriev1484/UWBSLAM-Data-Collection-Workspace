@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import csv
+import numpy as np
 
 def load_imu_csv(filepath):
     timestamps = []
@@ -48,10 +49,24 @@ def plot_imu(timestamps, acc, gyro):
     axs[1].legend()
     axs[1].grid()
 
+    acc = np.array(acc).T
+
+    for i in range(0,3):
+        print(f" First window { np.std(acc[0:2000, i]) }")
+        print(f" Second window { np.std(acc[2000:4000, i]) }")
+        print(f" Third window { np.std(acc[4000:6000, i]) }")
+
+    # 0.19 is likely too large to be a bias,
+    # This averaging should be done in the navigation frame
+    # GTSAM should be giving us the correct result, 
+    # because it rotates into the nav frame to perform gravity compensation, and has its loss function defined there
+    # should not be giving us the same as this local frame windowed average
+    # Local frame windowed average should be more susecptible to coordinate frame error.
+
     plt.tight_layout()
     plt.show()
 
 if __name__ == "__main__":
-    filepath = "./out/stereoi_circle2_post/ml/imu_data.csv"  # Change t_
+    filepath = "./out/imu_bias_forward_post/ml/imu_data.csv"  # Change t_
     timestamps, acc, gyro = load_imu_csv(filepath)
     plot_imu(timestamps, acc, gyro)

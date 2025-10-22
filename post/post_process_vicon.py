@@ -288,37 +288,15 @@ for i in range(0, imu.shape[0]-window_size):
 # interval_end_tstp = imu[interval_end, 0]
 interval_end_tstp = START+30
 imu_stationary = imu[(START < imu[:,0]) & (imu[:,0] < interval_end_tstp)]
-
-# Gram-Schmidt gravity-alignment
-def gram_schmidt(gravity_vec):
-    """Build orthonormal frame with z aligned to gravity_vec (IMU frame)."""
-    z_axis = gravity_vec / np.linalg.norm(gravity_vec)
-    v1 = np.array([1.0, 0.0, 0.0])
-    v2 = np.array([0.0, 1.0, 0.0])
-
-    x_axis = v1 - np.dot(v1, z_axis) * z_axis
-    x_axis /= np.linalg.norm(x_axis)
-    y_axis = v2 - np.dot(v2, z_axis) * z_axis - np.dot(v2, x_axis) * x_axis
-    y_axis /= np.linalg.norm(y_axis)
-
-    R_inertial_to_imu = np.column_stack((x_axis, y_axis, z_axis))
-    # Gram-Schmidt gives us the rotation from the IMU to some (in this case Z-up) inertial frame
-    return R_inertial_to_imu
-
-# TODO: Discard Gram-Schmidt, before implementing rotation correction
 mean_accel_imu = np.average(imu_stationary[:, 1:4], axis=0)
-print(mean_accel_imu)
-g_inertial = np.array([0,0,-9.81])
-R_inertial_to_imu = gram_schmidt(mean_accel_imu)
-g_imu = R_inertial_to_imu @ g_inertial
+
+g_imu = np.array([0, 9.81, 0])
 accel_bias = mean_accel_imu + g_imu # Assumes realsense is gravity aligned during calibration
-print(f"Correct g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
 # accel_bias = mean_accel_imu + np.array([0,9.81, 0])
 
 priors = {"accel_bias":accel_bias, "gyro_bias":np.array([0,0,0]), "velocity":np.array([0,0,0])}
 
 print(f"{imu[interval_end, 0]-START}s stationary IMU window detected from {START} - {imu[interval_end, 0]}")
-print(f"Gram-Schmidt computed R_inertial_to_imu as {R_inertial_to_imu}")
 
 ### Apply transforms to the Vicon tracking data of cam1
 

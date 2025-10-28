@@ -40,7 +40,7 @@ parser.add_argument("--slam_available", action="store_true") # If we have no orb
 # Since my code is a mess, I'm going to do this by just aliasing the vicon data into the slam arrays.
 
 parser.add_argument("--calibration_file", "-c", type=str)
-parser.add_argument("--crop_start", type=float, default=0) # Pass the relative timestamp from startthat you want to crop away all data before. Data will still be used to compute transforms.
+parser.add_argument("--crop_start", type=float, default=0) # Pass the relative timestamp from startthat you want to crop away all data before. Data will still be used to compute T.
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
 
@@ -143,7 +143,7 @@ args.crop_start += START
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
-RS_VICON_NAME = "LeftRS" # Or "LeftRS2"
+RS_VICON_NAME = "Head4" # Or "LeftRS2"
 if args.vicon_available:
     vicon_data = crop_vicon(vicon_data, START, END)
     mobile_objects = [RS_VICON_NAME]
@@ -159,49 +159,37 @@ def filtt2(arr): # For filtering a CSV output
     return list(filter(lambda x: (START <= x[0] <= END), arr))
 
 
-### Define all coordinate transforms
-Transforms = SimpleNamespace()
+### Define all coordinate frames in T
+T = SimpleNamespace()
 
 # Transform from vicon marker on helmet, to center of RS camera (body frame)
 
 # Vicon coordinate frames are marked with a 'v'
-# In reality 
-Transforms.T_vuwb1_to_vcam1 = np.array([])
 
 #Transform from vicon marker on anchor, to the center of the DW1000 UWB chip
-Transforms.T_vuwb_to_uwbtx = np.eye(4) # Probably better to express as a vector in the vUWB frame
-Transforms.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
+T.T_vuwb_to_uwbtx = np.eye(4) # Probably better to express as a vector in the vUWB frame
+T.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
 if args.slam_available:
     #Transform from vicon marker to the center of an Apriltag
     # I manually selected the center of the apriltag to define the vicon frame
-    Transforms.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
-
-# Transforms.T_world_to_anchor = world_to_anchor_marker[:3, 3]
+    T.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
 
 # The SLAM tracked body is the left camera.
-# Is my body frame defined as the IMU?
-# My body frame is Z-up, X-right, Y-forward
-# Transforms.T_imu_to_body = np.array([
-#                                         [1, 0, 0, 0],
-#                                         [0, 0, 1, 0],
-#                                         [0, -1, 0, 0],
-#                                         [0, 0, 0, 1]
-#                                     ])
-Transforms.T_imu_to_body = np.eye(4) # For irl3
-# Transforms.T_vcam1_to_cam1 = np.array([
-#                                         [ 0, -1, 0, 0],
-#                                         [0, 0, -1, -0.03],
-#                                         [1, 0, 0, 0],
-#                                         [0, 0, 0, 1]
-#                                         ]) #For irl4
-Transforms.T_vcam1_to_cam1 = np.eye(4)
-Transforms.T_body_to_imu = np.linalg.inv(Transforms.T_imu_to_body)
+
+# 'Head' refers to the vicon tracked head pose
+T.T_imu_to_body = np.eye(4)
+T.T_body_to_imu = np.linalg.inv(T.T_imu_to_body)
+
+T.T_head_to_cam1 = np.eye(4) # TODO
 
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
-Transforms.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
-Transforms.T_cam1_to_body = Transforms.T_imu_to_body @ np.linalg.inv(Transforms.T_imu_to_cam1)
-Transforms.T_body_to_decawave = np.eye(4)
+T.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
+T.T_cam1_to_body = T.T_imu_to_body @ np.linalg.inv(T.T_imu_to_cam1)
+T.T_head_to_body = T.T_cam1_to_body @ T.T_head_to_cam1
+
+T.T_head_to_decawave = np.eye(4) # TODO
+T.T_body_to_decawave = T.T_head_to_decawave @ np.linalg.inv(T.T_head_to_body)
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 
@@ -216,10 +204,10 @@ if args.slam_available:
     ZERO_TIMESTAMP = slam_data[0][0]
 
     if not args.vicon_for_worldframing:
-        # Use the apriltag to compute Transforms.T_world_to_sorigin
-        Transforms = extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, 
+        # Use the apriltag to compute T.T_world_to_sorigin
+        T = extract_apriltag_pose(slam_data, infra1_raw_frames, T, 
                                         in_kalibr, in_apriltags, 
-                                        T_world_to_tag=np.linalg.inv(Transforms.T_vapril_to_world))
+                                        T_world_to_tag=np.linalg.inv(T.T_vapril_to_world))
     else:
         # Find the closest Vicon pose to the SLAM origin
         cam1_slam =slam_data # Cam1 w.r.t SLAM origin
@@ -238,13 +226,13 @@ if args.slam_available:
                 best_slam_i = i
         
         print(f"{best_t=}")
-        Transforms.T_cam1_to_world = slam_quat_to_HTM(cam1_vicon[best_vicon_idx, :])
+        T.T_cam1_to_world = slam_quat_to_HTM(cam1_vicon[best_vicon_idx, :])
         T_cam1_to_sorigin = slam_quat_to_HTM(cam1_slam[best_slam_i, :])
 
-        Transforms.T_world_to_sorigin = T_cam1_to_sorigin @ np.linalg.inv(Transforms.T_cam1_to_world)
+        T.T_world_to_sorigin = T_cam1_to_sorigin @ np.linalg.inv(T.T_cam1_to_world)
 
     def slam_tracked_body_to_my_body(T_cam1_to_sorigin): # SLAM quat gives you the transform from cam1 frame to slam origin
-        return Transforms.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin) @ Transforms.T_world_to_sorigin
+        return T.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin) @ T.T_world_to_sorigin
     slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
 
         # Convert from nparray to json format
@@ -288,24 +276,56 @@ for i in range(0, imu.shape[0]-window_size):
 # interval_end_tstp = imu[interval_end, 0]
 interval_end_tstp = START+30
 imu_stationary = imu[(START < imu[:,0]) & (imu[:,0] < interval_end_tstp)]
-mean_accel_imu = np.average(imu_stationary[:, 1:4], axis=0)
-
-g_imu = np.array([0, 9.81, 0])
-accel_bias = mean_accel_imu + g_imu # Assumes realsense is gravity aligned during calibration
-# accel_bias = mean_accel_imu + np.array([0,9.81, 0])
-
-priors = {"accel_bias":accel_bias, "gyro_bias":np.array([0,0,0]), "velocity":np.array([0,0,0])}
-
 print(f"{imu[interval_end, 0]-START}s stationary IMU window detected from {START} - {imu[interval_end, 0]}")
 
-### Apply transforms to the Vicon tracking data of cam1
+accel_norm_tol = 0.1
+for i in range(0, imu_stationary.shape[0]):
+    if (accel_mag[i] > 9.81 + accel_norm_tol or accel_mag[i] < 9.81 - accel_norm_tol):
+        print ( f" ERROR: Bad box calibration, accel norm {accel_mag[i]} is far from 9.81")
+        # exit()
+
+BIAS_STRATEGY = 'gram-schmidt'
+
+mean_accel_imu = np.average(imu_stationary[:, 1:4], axis=0)
+mean_gyro_imu = np.average(imu_stationary[:, 4:8], axis=0)
+g_inertial = np.array([0,0,9.81])
+R_inertial_to_imu = np.eye(4)
+
+if BIAS_STRATEGY == 'gram-schmidt':
+    def gram_schmidt(gravity_vec):
+        """Build orthonormal frame with z aligned to gravity_vec (IMU frame)."""
+        z_axis = gravity_vec / np.linalg.norm(gravity_vec)
+        v1 = np.array([1.0, 0.0, 0.0])
+        v2 = np.array([0.0, 1.0, 0.0])
+
+        x_axis = v1 - np.dot(v1, z_axis) * z_axis
+        x_axis /= np.linalg.norm(x_axis)
+        y_axis = v2 - np.dot(v2, z_axis) * z_axis - np.dot(v2, x_axis) * x_axis
+        y_axis /= np.linalg.norm(y_axis)
+
+        R_inertial_to_imu = np.column_stack((x_axis, y_axis, z_axis))
+        # Gram-Schmidt gives us the rotation from the IMU to some (in this case Z-up) inertial frame
+        # return np.linalg.inv(R_inertial_to_imu)
+        return R_inertial_to_imu
+    R_inertial_to_imu = gram_schmidt(mean_accel_imu)
+
+    gyro_bias = mean_gyro_imu
+    g_imu = R_inertial_to_imu @ g_inertial
+    accel_bias = mean_accel_imu - g_imu # Assumes realsense is gravity aligned during calibration\
+    print(f" {mean_accel_imu=} {g_imu=}")
+    print(f"Gram Schmidt reported a: { accel_bias}, g: {gyro_bias}, R:{R_inertial_to_imu=} ")
+    print(f"Ideal g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
+    priors = {"accel_bias":accel_bias, "gyro_bias":gyro_bias, "velocity":np.array([0,0,0]), "t_end_calibration":interval_end_tstp}
+
+
+### Apply T to the Vicon tracking data of cam1
 
 synth_vicon_json = []
 vicon_json = []
 if args.vicon_available:
-    def vicon_tracked_body_to_my_body(T_vcam1_to_world):
-        # By default, vicon pose tracking gives you the T_vcam1_to_world
-        return Transforms.T_cam1_to_body @ Transforms.T_vcam1_to_cam1 @ np.linalg.inv(T_vcam1_to_world)
+    def vicon_tracked_body_to_my_body(T_head_to_world):
+        # By default, vicon pose tracking gives you the T_head_to_world
+        return T.T_cam1_to_body @ T.T_head_to_cam1 @ np.linalg.inv(T_head_to_world)
 
     vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data[RS_VICON_NAME]))
 
@@ -321,6 +341,17 @@ if args.vicon_available:
                     "vz": float(body_v[3])
             }
         } for body_pose, body_v in zip( list(vicon_body_poses), list(vicon_body_velocities))]
+    
+    if BIAS_STRATEGY == 'vicon':
+        vicon_stationary =  vicon_body_poses[(START < vicon_body_poses[:,0]) & (vicon_body_poses[:,0] < interval_end_tstp)]
+        T_world_to_body = vicon_stationary[0, 1:].reshape((4,4))
+        R_inertial_to_imu = T_world_to_body[:3,:3]
+        gyro_bias = mean_gyro_imu
+        g_imu = R_inertial_to_imu @ g_inertial
+        accel_bias = mean_accel_imu - g_imu # Assumes realsense is gravity aligned during calibration\
+        print(f"Vicon reported a: { accel_bias}, g: {gyro_bias}, R:{R_inertial_to_imu=} ")
+        print(f"Ideal g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
+        priors = {"accel_bias":accel_bias, "gyro_bias":gyro_bias, "velocity":np.array([0,0,0]), "t_end_calibration":interval_end_tstp}
 
 synth_slam_json = []
 if args.synth_slam:
@@ -427,7 +458,7 @@ vicon_uwbtx_json = []
 if args.include_vicon_tx_pose:
     # Has problems because in the IRL datasets we frequently lose tracking of the UWB1
     def vicon_tracked_uwb1_to_uwb1_tx(T_vuwb1_to_world): 
-        return Transforms.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
+        return T.T_vuwb_to_uwbtx @ np.linalg.inv(T_vuwb1_to_world)
     vicon_tx_poses, _ = aggregate_tracker(vicon_tracked_uwb1_to_uwb1_tx, np.array(vicon_data["UWB1"]))
 
     vicon_uwbtx_json = [ {
@@ -460,7 +491,7 @@ class NumpyEncoder(json.JSONEncoder):
             return vars(obj)
         return super().default(obj)
 
-### Copy all world information: transforms, anchors, apriltags, to output
+### Copy all world information: T, anchors, apriltags, to output
 
 if args.vicon_available:
     # Use Vicon information to compute the world frame for our tags and anchors
@@ -469,7 +500,7 @@ if args.vicon_available:
     for tracked_name, data in vicon_data.items():
         if "UWB" in tracked_name and tracked_name not in mobile_objects:
             # Compute the tx point over all poses, then average them.
-            uwb_tx_position = get_tx_position(Transforms.T_vuwb_to_uwbtx, data)
+            uwb_tx_position = get_tx_position(T.T_vuwb_to_uwbtx, data)
             world_frame_anchors.append({
                 "ID": tracked_name.replace("UWB", ""),
                 "position": uwb_tx_position
@@ -489,7 +520,7 @@ if args.vicon_available:
     json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
 
 
-with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(Transforms), fs, cls=NumpyEncoder, indent=1)
+with open(f'{outpath}/T.json', 'w') as fs: json.dump(vars(T), fs, cls=NumpyEncoder, indent=1)
 
 # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
 if args.vicon_available:

@@ -10,13 +10,13 @@ def load_imu_csv(filepath):
     with open(filepath, 'r') as f:
         reader = csv.reader(f)
         for row in reader:
-            if len(row) != 8:
+            if len(row) != 7:
                 print(f"Skipping malformed row: {row}")
                 continue
             try:
                 t = float(row[0])
-                ax, ay, az = float(row[2]), float(row[3]), float(row[4])
-                gx, gy, gz = float(row[5]), float(row[6]), float(row[7])
+                ax, ay, az = float(row[1]), float(row[2]), float(row[3])
+                gx, gy, gz = float(row[4]), float(row[5]), float(row[6])
             except ValueError:
                 print(f"Skipping invalid row: {row}")
                 continue
@@ -31,6 +31,8 @@ def load_imu_csv(filepath):
 def plot_imu(timestamps, acc, gyro):
     fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
     fig.suptitle("IMU Data from CSV")
+
+    print(acc)
 
     # Accelerometer
     axs[0].plot(timestamps, acc[0], label='ax')

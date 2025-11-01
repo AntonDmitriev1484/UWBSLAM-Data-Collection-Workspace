@@ -42,5 +42,5 @@ def plot_imu_data(imu_data):
     plt.show()
 
 if __name__ == "__main__":
-    imu_data = load_imu_data("./out/imu_bias_cam2_align_post/calibration.json" )  # Replace with your actual file path
+    imu_data = load_imu_data("./out/irl5_imu_bias_straight3_post/all.json")  # Replace with your actual file path
     plot_imu_data(imu_data)

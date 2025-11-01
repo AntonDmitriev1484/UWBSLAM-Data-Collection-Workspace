@@ -146,17 +146,17 @@ def clean_vicon(vicon_data):
                     interp_pose = HTM_to_TUM(interp_pose) # Returns a non timestamped HTM
                     data[i] = np.insert(interp_pose, 0, current_timestamp) #I'm pretty sure this mutates the original array?
 
-        # Clean poses to account for bad rotations
-
         for i in range(1, len(data)):
             last_pose = np.array(data[i-1]) # Last valid TUM timestamped pose
             this_pose = np.array(data[i])
             last_rot = R.from_quat(last_pose[4:8])
             this_rot = R.from_quat(this_pose[4:8])
 
+            # print(f"{last_rot.as_rotvec()=} {this_rot.as_rotvec()=}")
+
             angle_diff_deg = np.degrees(np.linalg.norm((this_rot * last_rot.inv()).as_rotvec()))
-            if angle_diff_deg > 1:
-                corrected_pose = last_pose
+            if angle_diff_deg > 145:
+                corrected_pose = last_pose.copy()
                 corrected_pose[0:4] = this_pose[0:4] # New position and timestamp but the last (correct) rotation.
                 data[i] = corrected_pose
 

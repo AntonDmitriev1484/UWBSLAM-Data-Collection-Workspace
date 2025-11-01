@@ -44,11 +44,6 @@ parser.add_argument("--crop_start", type=float, default=0) # Pass the relative t
 parser.add_argument("--anchors_file", "-a", type=str)
 parser.add_argument("--apriltags_file", "-p", type=str)
 
-# def str_to_tuple(s):
-#     print(s)
-#     toop = tuple(map(float, (s.remove("(").remove(")")).split(",")))
-#     print(toop)
-#     return toop
 parser.add_argument("--synth_slam", type=float, nargs=2)
 
 parser.add_argument("--interpolate_slam", "-i", default=0, type=int) # -i controls how many interpolated poses you want between each pair of SLAM poses.
@@ -143,10 +138,18 @@ args.crop_start += START
 print(f"ROS duration {START} - {END}")
 print(f"Data start {START} cropped to {args.crop_start}")
 
-RS_VICON_NAME = "Head4" # Or "LeftRS2"
+vicon_name = f"Head{os.environ['USER_ID']}"
+if os.environ['USER_ID'] == "2":
+    if args.trial_name == "irl5_imu_bias_straight3" or args.trial_name == "irl5_imu_bias_worn":
+        vicon_name = "Head4"
+    elif args.trial_name =='irl4_free_together':
+        vicon_name = "LeftRS2"
+
+print(f"Using vicon {vicon_name}")
+
 if args.vicon_available:
     vicon_data = crop_vicon(vicon_data, START, END)
-    mobile_objects = [RS_VICON_NAME]
+    mobile_objects = [vicon_name]
     vicon_data = clean_vicon(vicon_data)
 
 # Need to adjust vicon data to actual timestamps instead of just frame indices
@@ -181,14 +184,20 @@ if args.slam_available:
 T.T_imu_to_body = np.eye(4)
 T.T_body_to_imu = np.linalg.inv(T.T_imu_to_body)
 
-T.T_head_to_cam1 = np.eye(4) # TODO
+T_cam1_to_head = np.array([[-1 , 0, 0, 0.0175],
+                           [0, 0, -1, -0.08],
+                           [0, -1, 0, 0],
+                           [0, 0, 0, 1]])
+T.T_head_to_cam1 = np.linalg.inv(T_cam1_to_head)
 
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
 T.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
 T.T_cam1_to_body = T.T_imu_to_body @ np.linalg.inv(T.T_imu_to_cam1)
 T.T_head_to_body = T.T_cam1_to_body @ T.T_head_to_cam1
 
-T.T_head_to_decawave = np.eye(4) # TODO
+T_decawave_to_head = np.eye(4)
+T_decawave_to_head[3,:3] = np.array([-0.01, -0.0175, 0.0525])
+T.T_head_to_decawave = np.linalg.inv(T_decawave_to_head)
 T.T_body_to_decawave = T.T_head_to_decawave @ np.linalg.inv(T.T_head_to_body)
 
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
@@ -211,7 +220,7 @@ if args.slam_available:
     else:
         # Find the closest Vicon pose to the SLAM origin
         cam1_slam =slam_data # Cam1 w.r.t SLAM origin
-        cam1_vicon = np.array(vicon_data[RS_VICON_NAME]) # Cam1 w.r.t vicon world origin
+        cam1_vicon = np.array(vicon_data[vicon_name]) # Cam1 w.r.t vicon world origin
 
         # Pick the pose for alignment based of the best timestamp sync
         best_t = np.inf
@@ -281,15 +290,21 @@ print(f"{imu[interval_end, 0]-START}s stationary IMU window detected from {START
 accel_norm_tol = 0.1
 for i in range(0, imu_stationary.shape[0]):
     if (accel_mag[i] > 9.81 + accel_norm_tol or accel_mag[i] < 9.81 - accel_norm_tol):
-        print ( f" ERROR: Bad box calibration, accel norm {accel_mag[i]} is far from 9.81")
+        print ( f" WARN: Bad box calibration, accel norm {accel_mag[i]} is far from 9.81")
+        break
         # exit()
 
-BIAS_STRATEGY = 'gram-schmidt'
+print(f" Average gravity magnitude in accelerometer frame {np.average(accel_mag[0:imu_stationary.shape[0]])}")
+
+BIAS_STRATEGY = 'average'
 
 mean_accel_imu = np.average(imu_stationary[:, 1:4], axis=0)
+std_accel_imu = np.std(imu_stationary[:, 1:4], axis=0)
 mean_gyro_imu = np.average(imu_stationary[:, 4:8], axis=0)
 g_inertial = np.array([0,0,9.81])
 R_inertial_to_imu = np.eye(4)
+priors = {}
+print(f"{mean_accel_imu=} {std_accel_imu=}")
 
 if BIAS_STRATEGY == 'gram-schmidt':
     def gram_schmidt(gravity_vec):
@@ -317,7 +332,21 @@ if BIAS_STRATEGY == 'gram-schmidt':
     print(f"Ideal g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
     priors = {"accel_bias":accel_bias, "gyro_bias":gyro_bias, "velocity":np.array([0,0,0]), "t_end_calibration":interval_end_tstp}
 
+    print(f"Quick average reports a: { mean_accel_imu + np.array([0,9.81,0])} g: {gyro_bias}")
 
+if BIAS_STRATEGY == 'average':
+
+    R_inertial_to_imu = np.array([[1,0,0],[0,0,-1],[0,1,0]])
+
+    gyro_bias = mean_gyro_imu
+    g_imu = R_inertial_to_imu @ g_inertial
+    accel_bias = mean_accel_imu - g_imu # Assumes realsense is gravity aligned during calibration\
+    print(f" {mean_accel_imu=} {g_imu=}")
+    print(f"Average reported a: { accel_bias}, g: {gyro_bias}, R:{R_inertial_to_imu=} ")
+    print(f"Ideal g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
+    priors = {"accel_bias":accel_bias, "gyro_bias":gyro_bias, "velocity":np.array([0,0,0]), "t_end_calibration":interval_end_tstp}
+
+    print(f"Quick average reports a: { mean_accel_imu + np.array([0,9.81,0])} g: {gyro_bias}")
 ### Apply T to the Vicon tracking data of cam1
 
 synth_vicon_json = []
@@ -325,9 +354,9 @@ vicon_json = []
 if args.vicon_available:
     def vicon_tracked_body_to_my_body(T_head_to_world):
         # By default, vicon pose tracking gives you the T_head_to_world
-        return T.T_cam1_to_body @ T.T_head_to_cam1 @ np.linalg.inv(T_head_to_world)
+        return T.T_cam1_to_body @ T.T_head_to_cam1 @ np.linalg.inv(T_head_to_world) #output world to body
 
-    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data[RS_VICON_NAME]))
+    vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data[vicon_name]))
 
     # Convert from nparray to json format
     # Add Vicon poses to all_data
@@ -345,101 +374,130 @@ if args.vicon_available:
     if BIAS_STRATEGY == 'vicon':
         vicon_stationary =  vicon_body_poses[(START < vicon_body_poses[:,0]) & (vicon_body_poses[:,0] < interval_end_tstp)]
         T_world_to_body = vicon_stationary[0, 1:].reshape((4,4))
+        
         R_inertial_to_imu = T_world_to_body[:3,:3]
         gyro_bias = mean_gyro_imu
+
         g_imu = R_inertial_to_imu @ g_inertial
-        accel_bias = mean_accel_imu - g_imu # Assumes realsense is gravity aligned during calibration\
-        print(f"Vicon reported a: { accel_bias}, g: {gyro_bias}, R:{R_inertial_to_imu=} ")
+        accel_bias = g_imu - mean_accel_imu # Assumes realsense is gravity aligned during calibration\
+        print(f"Vicon reported: \nba: { accel_bias} \nbg: {gyro_bias} \nR:{R_inertial_to_imu=} ")
+        print(f" Mean a_imu={mean_accel_imu}")
         print(f"Ideal g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
         priors = {"accel_bias":accel_bias, "gyro_bias":gyro_bias, "velocity":np.array([0,0,0]), "t_end_calibration":interval_end_tstp}
+
+        window = 200 #1s of imu measurements
+
+        for i, start in enumerate(range(0, imu_stationary.shape[0], window)):
+            end = start + window
+            if end > imu_stationary.shape[0]:
+                break  # skip incomplete window at the end
+
+            mean_accel_imu = np.mean(imu_stationary[start:end, 1:4], axis=0)
+            mean_gyro_imu = np.mean(imu_stationary[start:end, 4:7], axis=0)  # adjust columns if gyro in 4:7
+
+            g_imu = R_inertial_to_imu @ g_inertial
+            accel_bias = mean_accel_imu - g_imu  # assumes realsense gravity alignment
+
+            # print(f"Window {i}: accel_bias = {accel_bias}, gyro_bias = {mean_gyro_imu}")
+
+
 
 synth_slam_json = []
 if args.synth_slam:
     print(args.synth_slam)
 
-    vicon_freq = len(vicon_data[RS_VICON_NAME]) / (END-START)
-    skip = int(vicon_freq / args.synth_slam[0]) # Number of vicon poses to skip in subsampling to synth slam frequency
+    vicon_freq = len(vicon_data[vicon_name]) / (END-START)
+    skip = math.ceil(vicon_freq / args.synth_slam[0]) # Number of vicon poses to skip in subsampling to synth slam frequency
+
+    JUST_SUBSAMPLE = True
+    max_t_err = 0
+    max_R_err = 0
+    t_rw_step = 0
+    R_rw_step = 0
 
     # Define error random walk
-    max_t_err = 0.15 # Allowing for at most 15cm trans error
-    max_R_err = 5 # Allowing for at most 5 deg rot error
+    # max_t_err = 0.15 # Allowing for at most 15cm trans error
+    # max_R_err = 5 # Allowing for at most 5 deg rot error
 
-    t_rw_step = 0.005 # How much error change do we want to see per vicon pose? # 1mm change is at most 10cm drift / s
-    R_rw_step = 0.01
+    # t_rw_step = 0.005 # How much error change do we want to see per vicon pose? # 1mm change is at most 10cm drift / s
+    # R_rw_step = 0.01
     t_err = np.zeros(3)
     R_err = np.eye(3)
 
     rng = np.random.default_rng(0)
 
-    tracker_data_tum = np.array(vicon_data[RS_VICON_NAME])
+    tracker_data_tum = np.array(vicon_data[vicon_name])
     slam_body_poses = [] # Synthetic slam body poses
 
-    # First generate all of the error vectors
-    t_err_ = []
-    R_err_ = []
-    for i in range(tracker_data_tum.shape[0]-1):
+    if not JUST_SUBSAMPLE:
+        # First generate all of the error vectors
+        t_err_ = []
+        R_err_ = []
+        for i in range(tracker_data_tum.shape[0]-1):
 
-        # Take the random walk step in our error. 
-        # Clamp t_err and R_err to bounds after step.
-        delta_t = rng.normal(0, t_rw_step, 3) # Generate step from Gauss
-         # We want 0 preturbation along the local z axis. I.e. no forward drift. But the Z-axis will not always be forward!
-        new_t_err = t_err + delta_t # Apply step
-        if np.linalg.norm(new_t_err) <= max_t_err: # Clamp
-            t_err = new_t_err
+            # Take the random walk step in our error. 
+            # Clamp t_err and R_err to bounds after step.
+            delta_t = rng.normal(0, t_rw_step, 3) # Generate step from Gauss
+            # We want 0 preturbation along the local z axis. I.e. no forward drift. But the Z-axis will not always be forward!
+            new_t_err = t_err + delta_t # Apply step
+            if np.linalg.norm(new_t_err) <= max_t_err: # Clamp
+                t_err = new_t_err
 
-        # print(f"{t_err=} {delta_t=}")
+            # print(f"{t_err=} {delta_t=}")
 
-        delta_rvec = rng.normal(0, np.deg2rad(R_rw_step), 3)  # Generate step from Gauss
-        delta_r = R.from_rotvec(delta_rvec).as_matrix()
-        new_R_err = delta_r @ R_err # Apply step
-        angle = R.from_matrix(new_R_err).magnitude()
-        if angle <= np.deg2rad(max_R_err): # Clamp
-            R_err = new_R_err
+            delta_rvec = rng.normal(0, np.deg2rad(R_rw_step), 3)  # Generate step from Gauss
+            delta_r = R.from_rotvec(delta_rvec).as_matrix()
+            new_R_err = delta_r @ R_err # Apply step
+            angle = R.from_matrix(new_R_err).magnitude()
+            if angle <= np.deg2rad(max_R_err): # Clamp
+                R_err = new_R_err
 
-        t_err_.append(t_err)
-        R_err_.append(R_err)
+            t_err_.append(t_err)
+            R_err_.append(R_err)
 
-    # Smooth over translation error
-    t_err_ = np.array(t_err_)
-    R_err_ = np.array(R_err_)
-
-
-    print(f"{t_err_.shape=} {R_err_.shape=}")
-
-    window = 25
-    cumsum = np.cumsum(t_err_, axis = 0) 
-    t_err_ = (cumsum[window:] - cumsum[:-window]) / float(window)
-    R_err_ = R_err_[window:]
+        # Smooth over translation error
+        t_err_ = np.array(t_err_)
+        R_err_ = np.array(R_err_)
 
 
-    print(f"{t_err_.shape=} {R_err_.shape=}")
+        print(f"{t_err_.shape=} {R_err_.shape=}")
 
-    # Apply error vectors
-    for j in range(t_err_.shape[0]):
+        window = 25
+        cumsum = np.cumsum(t_err_, axis = 0) 
+        t_err_ = (cumsum[window:] - cumsum[:-window]) / float(window)
+        R_err_ = R_err_[window:]
 
-        # Pose of our errored frame, in the current tracker frame. -> Error is applied in the tracker frame.
-        # First translate by t_err, then rotate by R_err
-        # this applies the translation error vector in the tracker coord frame.
 
-        t_err_transform = np.eye(4)
-        t_err_transform[:3,3] = t_err_[j]
-        R_err_transform = np.eye(4)
-        R_err_transform[:3,:3] = R_err_[j]
-        error_transform = R_err_transform @ t_err_transform
+        print(f"{t_err_.shape=} {R_err_.shape=}")
 
-        tracker_pose = slam_quat_to_HTM(tracker_data_tum[j, :])   # tracker pose as HTM
+        # Apply error vectors
+        for j in range(t_err_.shape[0]):
 
-        # T_world_to_slam = T_world_to_error
-        slam_body_pose =  np.linalg.inv(error_transform) @ np.linalg.inv(tracker_pose) #  T_tracker_to_error @ T_world_to_tracker
-        slam_body_poses.append([tracker_data_tum[i, 0]] + list(slam_body_pose.flatten()))
+            # Pose of our errored frame, in the current tracker frame. -> Error is applied in the tracker frame.
+            # First translate by t_err, then rotate by R_err
+            # this applies the translation error vector in the tracker coord frame.
 
-    slam_body_poses = np.array(slam_body_poses)
-    slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
+            t_err_transform = np.eye(4)
+            t_err_transform[:3,3] = t_err_[j]
+            R_err_transform = np.eye(4)
+            R_err_transform[:3,:3] = R_err_[j]
+            error_transform = R_err_transform @ t_err_transform
 
-        # Convert from nparray to json format
+            tracker_pose = slam_quat_to_HTM(tracker_data_tum[j, :])   # tracker pose as HTM
+
+            # T_world_to_slam = T_world_to_error
+            slam_body_pose =  np.linalg.inv(error_transform) @ np.linalg.inv(tracker_pose) #  T_tracker_to_error @ T_world_to_tracker
+            slam_body_poses.append([tracker_data_tum[j, 0]] + list(slam_body_pose.flatten()))
+
+        slam_body_poses = np.array(slam_body_poses)
+        slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
+
+    else:# For simplicity in testing irl5 imu. It seems the transforms bug out when I set the error params to 0
+        slam_body_poses = vicon_body_poses[::skip]
+
     # Add Vicon poses to all_data
 
-    print(slam_body_poses[:5])
+    # synth slam is being generated with all the same timestamps
     synth_slam_json = [ {
             "t": float(body_pose[0]),
             "type": "synth_slam_pose",
@@ -452,7 +510,7 @@ if args.synth_slam:
 # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
 assisted_uwb_json = []
 if args.map_vicon_to_uwb:
-    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data[RS_VICON_NAME]), 100)
+    assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data[vicon_name]), 100)
 
 vicon_uwbtx_json = []
 if args.include_vicon_tx_pose:
@@ -520,18 +578,26 @@ if args.vicon_available:
     json.dump(world_frame_tags, out_tags_trial, cls=NumpyEncoder, indent=1)
 
 
-with open(f'{outpath}/T.json', 'w') as fs: json.dump(vars(T), fs, cls=NumpyEncoder, indent=1)
+with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(T), fs, cls=NumpyEncoder, indent=1)
 
 # Run sanity check to make sure measurements are at the frequency we expect them to be before testing in the graph
 if args.vicon_available:
     print("Checking frequency of real data")
     print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
-    print(f" Measured vicon frequency {len(vicon_data[RS_VICON_NAME]) / (END-START)}")
+    print(f" Measured vicon frequency {len(vicon_data[vicon_name]) / (END-START)}")
+if args.synth_slam:
+    print("Checking frequency of synthetic SLAM")
+    print(f" Measured Synth SLAM frequency {len(synth_slam_json) / (END-START)}")
+
 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
 all_data = filtt(all_data)
 all_data = sorted(all_data, key=lambda x: x["t"])
-json.dump(all_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
+
+calibration_data = [a for a in all_data if a["t"] < interval_end_tstp]
+main_data = [a for a in all_data if a["t"] > interval_end_tstp]
+json.dump(calibration_data, open(outpath+"/calibration.json", 'w'), cls=NumpyEncoder, indent=1)
+json.dump(main_data, open(outpath+"/all.json", 'w'), cls=NumpyEncoder, indent=1)
 json.dump(priors, open(outpath+"/priors.json", 'w'), cls=NumpyEncoder, indent=1)
 
 # All data synthetic is (all real data except slam) + (real SLAM (filtered) + synthetic UWB (created from interpolating on real SLAM))

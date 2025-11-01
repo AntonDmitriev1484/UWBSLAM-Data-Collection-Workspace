@@ -70,7 +70,6 @@ if __name__== "__main__":
             uwbmap_vicon_poses.append(np.array(item["T_body_world"]))  # T_world_to_body
             
         if item.get("type") == "imu":
-            print(item)
             a_vector = np.array([item["ax"], item["ay"], item["az"]])
             accel_vectors.append(a_vector)  # T_world_to_body
             accel_ts.append(item["t"])
@@ -198,17 +197,21 @@ if __name__== "__main__":
                 draw_axes(ax, uwbmap_vicon_poses[i], length=0.4) 
 
     # --- Anchor positions ---
-    anchor_path = f"../out/{args.trial_name}_post/anchors.json"
-    with open(anchor_path, 'r') as f:
-        anchor_data = json.load(f)
-        for d in anchor_data:
-            ax.scatter(d["position"][0], d["position"][1], d["position"][2], color='purple')
-            ax.text(
-                d["position"][0],  # shift a bit in X
-                d["position"][1],  # shift a bit in Y
-                d["position"][2],
-                d["ID"], color="black"
-            )
+    # anchor_path = f"../out/{args.trial_name}_post/anchors.json"
+
+    # try:
+    #     with open(anchor_path, 'r') as f:
+    #         anchor_data = json.load(f)
+    #         for d in anchor_data:
+    #             ax.scatter(d["position"][0], d["position"][1], d["position"][2], color='purple')
+    #             ax.text(
+    #                 d["position"][0],  # shift a bit in X
+    #                 d["position"][1],  # shift a bit in Y
+    #                 d["position"][2],
+    #                 d["ID"], color="black"
+    #             )
+    # except Exception as e:
+    #     print("No anchors")
 
     # --- Apriltag pose ---
     

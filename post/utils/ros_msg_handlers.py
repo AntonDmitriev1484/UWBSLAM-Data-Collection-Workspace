@@ -103,7 +103,8 @@ def proc_imu(msg, arr_ref):
 def aggregate_uwb(topic_to_processing, uwb_csv, uwb_range_distribution):
     for j in topic_to_processing['/uwb_ranges'][1]:
         csv_row = []
-        for k, v in j.items(): csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
+        for k, v in j.items():
+            csv_row.append(v) # This should iterate in the order of how keys are originally defined in the json
         uwb_csv.append(csv_row)
         uwb_range_distribution.append(j['range'])
 
@@ -116,7 +117,14 @@ def aggregate_imu(topic_to_processing, imu_csv):
             if k != "type":
                 csv_row.append(v)
         imu_csv.append(csv_row)
-    
+#     k='t' v=1761788482.5987916
+# k='ax' v=-9.739026069641113
+# k='ay' v=0.6378458738327026
+# k='az' v=-0.24674910306930542
+# k='gx' v=-0.000980242039076984
+# k='gy' v=-0.005792018957436085
+# k='gz' v=0.0010896283201873302
+# csv_row=[1761788482.5987916, -9.739026069641113, 0.6378458738327026, -0.24674910306930542, -0.000980242039076984, -0.005792018957436085, 0.0010896283201873302]
     return topic_to_processing['/camera/camera/imu'][1]
 
 def aggregate_infra1(topic_to_processing, out_infra1):

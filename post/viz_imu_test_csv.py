@@ -67,6 +67,6 @@ def plot_imu(timestamps, acc, gyro):
     plt.show()
 
 if __name__ == "__main__":
-    filepath = "./out/imu_bias_forward_post/ml/imu_data.csv"  # Change t_
+    filepath = "./out/imu_bias_cam2_align_post/ml/imu_data.csv"  # Change t_
     timestamps, acc, gyro = load_imu_csv(filepath)
     plot_imu(timestamps, acc, gyro)

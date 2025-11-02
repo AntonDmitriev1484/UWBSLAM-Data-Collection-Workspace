@@ -61,6 +61,7 @@ def interpolate_pose(first_pose, first_timestamp, second_pose, second_timestamp,
     interp_pose[:3, 3] = interpolated_positions[idx_match]
 
     return interp_pose
+
 def clean_vicon(vicon_data):
 
     # If you're mobile and translation suddenly drop to 0, that means tracking was lost. interpolate that thang
@@ -105,7 +106,19 @@ def clean_vicon(vicon_data):
             if interp_pose is not None:
                 interp_pose = HTM_to_TUM(interp_pose) # Returns a non timestamped HTM
                 data[i] = np.insert(interp_pose, 0, current_timestamp) #I'm pretty sure this mutates the original array?
+    for i in range(1, len(data)):
+        last_pose = np.array(data[i-1]) # Last valid TUM timestamped pose
+        this_pose = np.array(data[i])
+        last_rot = R.from_quat(last_pose[4:8])
+        this_rot = R.from_quat(this_pose[4:8])
 
+        # print(f"{last_rot.as_rotvec()=} {this_rot.as_rotvec()=}")
+
+        angle_diff_deg = np.degrees(np.linalg.norm((this_rot * last_rot.inv()).as_rotvec()))
+        if angle_diff_deg > 145:
+            corrected_pose = last_pose.copy()
+            corrected_pose[0:4] = this_pose[0:4] # New position and timestamp but the last (correct) rotation.
+            data[i] = corrected_pose
     return data
 
 def tum_to_htm(tum_row):
@@ -129,6 +142,9 @@ def load_vicon_poses(csv_path, target):
                 try:
                     t = float(row[0]) / 1e3  # convert from ms to s
                     x, y, z = map(float, row[4:7])
+                    x /= 1000
+                    y/= 1000
+                    z/= 1000 # convert to m scale
                     qx, qy, qz, qw = map(float, row[7:11])
                     poses.append([t, x, y, z, qx, qy, qz, qw])
                 except ValueError:
@@ -201,6 +217,12 @@ def write_ros2_bag(trial_name, vicon_poses, imu_bag_path):
     vicon_poses = [p for p in vicon_poses if start_t <= p[0] <= end_t]
     print(f"[INFO] After cropping: {len(vicon_poses)} Vicon poses remain")
 
+    print(f"Priors for vicon2gt launchfile:")
+    R_head_to_world = R.from_quat(vicon_poses[0][4:8]).as_matrix()
+    t_world_to_head = vicon_poses[0][1:4]
+    print(f"R_BtoI {list(R_head_to_world.flatten())}")
+    print(f"p_BinI {t_world_to_head}")
+
     # --- Write Vicon poses ---
     for tum_row in vicon_poses:
         t, x, y, z, qx, qy, qz, qw = tum_row
@@ -254,7 +276,7 @@ if __name__ == "__main__":
     if not os.path.exists(imu_bag):
         raise FileNotFoundError(f"Missing ROS2 bag: {imu_bag}")
 
-    TARGET = "LeftRS2"
+    TARGET = "Head4"
     vicon_poses = load_vicon_poses(vicon_csv, TARGET)
     vicon_poses = clean_vicon(vicon_poses) # Including cleaning code with copy paste the good ol fashioned way
     print(f"Loaded {len(vicon_poses)} poses from {vicon_csv}")

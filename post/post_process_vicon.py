@@ -193,7 +193,54 @@ T.T_head_to_cam1 = np.linalg.inv(T_cam1_to_head)
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
 T.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
 T.T_cam1_to_body = T.T_imu_to_body @ np.linalg.inv(T.T_imu_to_cam1)
-T.T_head_to_body = T.T_cam1_to_body @ T.T_head_to_cam1
+T.T_head_to_body = T.T_cam1_to_body @ T.T_head_to_cam1 # Seems to work better?
+
+# Using vicon2gt transform (OLD) 0 priors, no rotation cleaning
+# R_BtoI: 
+#  -0.982850005038  0.0541105248933  -0.176289303963
+#   0.178865738218  0.0471454033784  -0.982743282161
+# -0.0448655244865  -0.997421356316 -0.0560153789284
+
+# p_BinI: 
+# -0.0791026103745
+#  0.0787707145914
+# -0.0722761133571
+
+# For irl5_imu_bias_worn and irl5_imu_bias_straight3
+# T_head_to_imu = [ [-0.982850005038 , 0.0541105248933 , -0.176289303963, -0.0791026103745],
+#                         [0.178865738218 , 0.0471454033784 , -0.982743282161, 0.0787707145914],
+#                         [-0.0448655244865 , -0.997421356316 ,-0.0560153789284, -0.0722761133571],
+#                         [0, 0, 0, 1]]
+
+# New
+# R_BtoI: 
+#  -0.998285  0.0519228 -0.0270487
+#  0.0292611  0.0423338  -0.998675
+# -0.0507089  -0.997753 -0.0437805
+
+# p_BinI: 
+# 0.000878626
+#   0.0123712
+#  -0.0607816
+
+# R_GtoV: 
+#            1 -1.56931e-05 -0.000889414
+#            0     0.999844   -0.0176416
+#  0.000889553    0.0176416     0.999844
+
+T_head_to_imu = np.array([
+        [-0.998285,  0.0519228, -0.0270487, 0.000878626],
+        [ 0.0292611, 0.0423338,  -0.998675, 0.0123712],
+        [-0.0507089,  -0.997753, -0.0437805, -0.0607816],
+        [ 0, 0, 0, 1]
+])
+T.T_head_to_body = T_head_to_imu
+
+T.T_inertial_to_world = np.eye(4)
+T.T_inertial_to_world[:3,:3] = np.array([           
+    [1, -1.56931e-05, -0.000889414],
+         [  0 ,    0.999844 ,  -0.0176416],
+[ 0.000889553 ,   0.0176416  ,   0.999844]])
 
 T_decawave_to_head = np.eye(4)
 T_decawave_to_head[3,:3] = np.array([-0.01, -0.0175, 0.0525])
@@ -296,7 +343,7 @@ for i in range(0, imu_stationary.shape[0]):
 
 print(f" Average gravity magnitude in accelerometer frame {np.average(accel_mag[0:imu_stationary.shape[0]])}")
 
-BIAS_STRATEGY = 'average'
+BIAS_STRATEGY = 'vicon'
 
 mean_accel_imu = np.average(imu_stationary[:, 1:4], axis=0)
 std_accel_imu = np.std(imu_stationary[:, 1:4], axis=0)
@@ -354,7 +401,8 @@ vicon_json = []
 if args.vicon_available:
     def vicon_tracked_body_to_my_body(T_head_to_world):
         # By default, vicon pose tracking gives you the T_head_to_world
-        return T.T_cam1_to_body @ T.T_head_to_cam1 @ np.linalg.inv(T_head_to_world) #output world to body
+        # return T.T_cam1_to_body @ T.T_head_to_cam1 @ np.linalg.inv(T_head_to_world) #output world to body
+        return T.T_head_to_body @ np.linalg.inv(T_head_to_world)
 
     vicon_body_poses, vicon_body_velocities = aggregate_tracker(vicon_tracked_body_to_my_body, np.array(vicon_data[vicon_name]))
 
@@ -375,31 +423,16 @@ if args.vicon_available:
         vicon_stationary =  vicon_body_poses[(START < vicon_body_poses[:,0]) & (vicon_body_poses[:,0] < interval_end_tstp)]
         T_world_to_body = vicon_stationary[0, 1:].reshape((4,4))
         
-        R_inertial_to_imu = T_world_to_body[:3,:3]
+        R_world_to_imu = T_world_to_body[:3,:3]
+        R_inertial_to_world = T.T_inertial_to_world[:3,:3]
         gyro_bias = mean_gyro_imu
-
+        R_inertial_to_imu = R_world_to_imu @ R_inertial_to_world
         g_imu = R_inertial_to_imu @ g_inertial
-        accel_bias = g_imu - mean_accel_imu # Assumes realsense is gravity aligned during calibration\
+        accel_bias = mean_accel_imu - g_imu # Assumes realsense is gravity aligned during calibration\
         print(f"Vicon reported: \nba: { accel_bias} \nbg: {gyro_bias} \nR:{R_inertial_to_imu=} ")
         print(f" Mean a_imu={mean_accel_imu}")
         print(f"Ideal g_imu={[0,9.81, 0]} computed g_imu {g_imu} mag = {np.linalg.norm(g_imu)}")
         priors = {"accel_bias":accel_bias, "gyro_bias":gyro_bias, "velocity":np.array([0,0,0]), "t_end_calibration":interval_end_tstp}
-
-        window = 200 #1s of imu measurements
-
-        for i, start in enumerate(range(0, imu_stationary.shape[0], window)):
-            end = start + window
-            if end > imu_stationary.shape[0]:
-                break  # skip incomplete window at the end
-
-            mean_accel_imu = np.mean(imu_stationary[start:end, 1:4], axis=0)
-            mean_gyro_imu = np.mean(imu_stationary[start:end, 4:7], axis=0)  # adjust columns if gyro in 4:7
-
-            g_imu = R_inertial_to_imu @ g_inertial
-            accel_bias = mean_accel_imu - g_imu  # assumes realsense gravity alignment
-
-            # print(f"Window {i}: accel_bias = {accel_bias}, gyro_bias = {mean_gyro_imu}")
-
 
 
 synth_slam_json = []

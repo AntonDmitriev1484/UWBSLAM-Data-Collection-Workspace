@@ -103,8 +103,6 @@ gt_standalone = []
 
 
 rostypes = load_rostypes()
-print(rostypes)
-
 uwb_message_count = 0
 processed_uwb_message = 0
 # Create reader instance and open for reading.
@@ -116,14 +114,9 @@ with AnyReader([bagpath], default_typestore=rostypes) as reader:
             msg = reader.deserialize(rawdata, connection.msgtype)
             proc, arr_ref = topic_to_processing[connection.topic]
             proc(msg, arr_ref)
-            if connection.msgtype == "beluga_messages/msg/BelugaRanges": 
-                processed_uwb_message +=1
-                uwb_message_count += 1
 
         except Exception:
-            print( "skipped UWB message")
-            if connection.msgtype == "beluga_messages/msg/BelugaRanges": 
-                uwb_message_count +=1
+            print( "Exception! skipped message")
             continue  # optionally log here
 
 # Processors functions have now buffered their individual topics into arr_ref
@@ -195,55 +188,66 @@ T.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
 T.T_cam1_to_body = T.T_imu_to_body @ np.linalg.inv(T.T_imu_to_cam1)
 T.T_head_to_body = T.T_cam1_to_body @ T.T_head_to_cam1 # Seems to work better?
 
-# Using vicon2gt transform (OLD) 0 priors, no rotation cleaning
-# R_BtoI: 
-#  -0.982850005038  0.0541105248933  -0.176289303963
-#   0.178865738218  0.0471454033784  -0.982743282161
-# -0.0448655244865  -0.997421356316 -0.0560153789284
 
-# p_BinI: 
-# -0.0791026103745
-#  0.0787707145914
-# -0.0722761133571
-
-# For irl5_imu_bias_worn and irl5_imu_bias_straight3
-# T_head_to_imu = [ [-0.982850005038 , 0.0541105248933 , -0.176289303963, -0.0791026103745],
-#                         [0.178865738218 , 0.0471454033784 , -0.982743282161, 0.0787707145914],
-#                         [-0.0448655244865 , -0.997421356316 ,-0.0560153789284, -0.0722761133571],
-#                         [0, 0, 0, 1]]
-
-# New
-# R_BtoI: 
-#  -0.998285  0.0519228 -0.0270487
-#  0.0292611  0.0423338  -0.998675
-# -0.0507089  -0.997753 -0.0437805
-
-# p_BinI: 
-# 0.000878626
-#   0.0123712
-#  -0.0607816
-
-# R_GtoV: 
-#            1 -1.56931e-05 -0.000889414
-#            0     0.999844   -0.0176416
-#  0.000889553    0.0176416     0.999844
-
-T_head_to_imu = np.array([
-        [-0.998285,  0.0519228, -0.0270487, 0.000878626],
-        [ 0.0292611, 0.0423338,  -0.998675, 0.0123712],
-        [-0.0507089,  -0.997753, -0.0437805, -0.0607816],
-        [ 0, 0, 0, 1]
-])
-T.T_head_to_body = T_head_to_imu
-
+T.T_head_to_body = np.eye(4)
 T.T_inertial_to_world = np.eye(4)
-T.T_inertial_to_world[:3,:3] = np.array([           
-    [1, -1.56931e-05, -0.000889414],
-         [  0 ,    0.999844 ,  -0.0176416],
-[ 0.000889553 ,   0.0176416  ,   0.999844]])
+
+if 'irl5_imu_bias' in args.trial_name:
+    print("Using irl5_imu_bias vicon2gt calibration")
+    # R_BtoI: 
+    #  -0.998285  0.0519228 -0.0270487
+    #  0.0292611  0.0423338  -0.998675
+    # -0.0507089  -0.997753 -0.0437805
+    # p_BinI: 
+    # 0.000878626
+    #   0.0123712
+    #  -0.0607816
+    # R_GtoV: 
+    #            1 -1.56931e-05 -0.000889414
+    #            0     0.999844   -0.0176416
+    #  0.000889553    0.0176416     0.999844
+    T_head_to_imu = np.array([
+            [-0.998285,  0.0519228, -0.0270487, 0.000878626],
+            [ 0.0292611, 0.0423338,  -0.998675, 0.0123712],
+            [-0.0507089,  -0.997753, -0.0437805, -0.0607816],
+            [ 0, 0, 0, 1]
+    ])
+    T.T_head_to_body = T_head_to_imu
+    T.T_inertial_to_world[:3,:3] = np.array([           
+        [1, -1.56931e-05, -0.000889414],
+        [  0 ,    0.999844 ,  -0.0176416],
+        [ 0.000889553 ,   0.0176416  ,   0.999844]]
+        )
+else: # For the real irl5 trails
+    print("Using irl5 actual trials vicon2gt calibration")
+    # R_BtoI: 
+    # -0.996180546165   0.0872390446955 -0.00369709652203
+    # 0.0128724013916    0.104847832127   -0.994404964479
+    # -0.0863633065861   -0.990654471135   -0.105570346672
+    # p_BinI: # Not going to use this one. Using the other instead
+    # 0.176367654217
+    # 0.377642969634
+    # 0.219567280234
+    # R_GtoV: 
+    # 0.999798194902 0.000372338335535   0.0200855877237
+    #                 0      0.9998282232  -0.0185344029545
+    # -0.0200890385544   0.0185306626175    0.999626452768
+    T_head_to_imu = np.eye(4)
+    T_head_to_imu[:3,:3] = np.array([  [  -0.996180546165 ,  0.0872390446955 ,-0.00369709652203],
+                                        [0.0128724013916,    0.104847832127,   -0.994404964479],
+                                        [-0.0863633065861 ,  -0.990654471135 ,  -0.105570346672]])
+    T_head_to_imu[:3,3] = np.array([   0.000878626 ,0.0123712, -0.0607816])
+
+    T.T_head_to_body = T_head_to_imu
+
+    T.T_inertial_to_world[:3,:3] = np.array([           
+        [1, -1.56931e-05, -0.000889414],
+        [  0 ,    0.999844 ,  -0.0176416],
+        [ 0.000889553 ,   0.0176416  ,   0.999844]]
+        )
 
 T_decawave_to_head = np.eye(4)
-T_decawave_to_head[3,:3] = np.array([-0.01, -0.0175, 0.0525])
+T_decawave_to_head[:3,3] = np.array([-0.01, -0.0175, 0.0525])
 T.T_head_to_decawave = np.linalg.inv(T_decawave_to_head)
 T.T_body_to_decawave = T.T_head_to_decawave @ np.linalg.inv(T.T_head_to_body)
 

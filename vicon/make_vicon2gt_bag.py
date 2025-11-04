@@ -217,12 +217,6 @@ def write_ros2_bag(trial_name, vicon_poses, imu_bag_path):
     vicon_poses = [p for p in vicon_poses if start_t <= p[0] <= end_t]
     print(f"[INFO] After cropping: {len(vicon_poses)} Vicon poses remain")
 
-    print(f"Priors for vicon2gt launchfile:")
-    R_head_to_world = R.from_quat(vicon_poses[0][4:8]).as_matrix()
-    t_world_to_head = vicon_poses[0][1:4]
-    print(f"R_BtoI {list(R_head_to_world.flatten())}")
-    print(f"p_BinI {t_world_to_head}")
-
     # --- Write Vicon poses ---
     for tum_row in vicon_poses:
         t, x, y, z, qx, qy, qz, qw = tum_row
@@ -276,10 +270,17 @@ if __name__ == "__main__":
     if not os.path.exists(imu_bag):
         raise FileNotFoundError(f"Missing ROS2 bag: {imu_bag}")
 
-    TARGET = "Head4"
-    vicon_poses = load_vicon_poses(vicon_csv, TARGET)
+
+    vicon_name = f"Head{os.environ['USER_ID']}"
+    if os.environ['USER_ID'] == "2":
+        if args.trial_name == "irl5_imu_bias_straight3" or args.trial_name == "irl5_imu_bias_worn":
+            vicon_name = "Head4"
+        elif args.trial_name =='irl4_free_together':
+            vicon_name = "LeftRS2"
+
+    vicon_poses = load_vicon_poses(vicon_csv, vicon_name)
     vicon_poses = clean_vicon(vicon_poses) # Including cleaning code with copy paste the good ol fashioned way
-    print(f"Loaded {len(vicon_poses)} poses from {vicon_csv}")
+    print(f"Loaded {len(vicon_poses)} poses from {vicon_csv}, using {vicon_name} poses")
 
     ros2_bag_path = write_ros2_bag(trial_name, vicon_poses, imu_bag)
     convert_ros2_to_ros1(ros2_bag_path, trial_name)

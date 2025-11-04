@@ -32,11 +32,16 @@ if __name__== "__main__":
 
     parser.add_argument("--velocity", action="store_true", help="Display velocity vectors rotated into world frame")
     parser.add_argument("--transforms_json", help="Optional transforms.json file", default=None)
+
+    parser.add_argument("--calibration", help="Look at calibration", action="store_true")
     args = parser.parse_args()
 
     SHOW_VICON_STRIDE = True
 
     all_json_path = f"../out/{args.trial_name}_post/all.json"
+    if args.calibration:
+        all_json_path = f"../out/{args.trial_name}_post/calibration.json"
+
     with open(all_json_path, 'r') as f:
         all_data = json.load(f)
 
@@ -222,7 +227,7 @@ if __name__== "__main__":
     ax.set_xlim(-2, 2)
     ax.set_ylim(-2,2)
     ax.set_zlim(-2, 2)
-    ax.set_title("Trajectory and Static Coordinate Frames")
+    ax.set_title(f"{all_json_path}")
     ax.view_init(elev=20, azim=45)
     ax.legend()
     plt.show()

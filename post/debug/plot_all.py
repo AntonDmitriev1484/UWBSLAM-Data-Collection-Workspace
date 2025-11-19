@@ -16,34 +16,47 @@ def draw_axes(ax, T, length=0.1):
     ax.quiver(*origin, *(y_axis-origin) * length, color='g')
     ax.quiver(*origin, *(z_axis-origin) * length, color='b')
 
-if __name__== "__main__":
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot trajectory and coordinate transforms from all.json")
     parser.add_argument("trial_name", help="Trial name")
-    parser.add_argument("--slam", action="store_true", help="Plot SLAM trajectory if available in all.json") 
-    parser.add_argument("--synth_slam", action="store_true", help="Plot Synthetic SLAM trajectory if available in all.json") 
-    #'action' means if flag is present, automatically store true, if absent, store false
-    parser.add_argument("--vicon", action="store_true", help="Plot Vicon trajectory if available in all.json")
-    parser.add_argument("--vicon_tx", action="store_true", help="Plot Vicon TX Pose trajectory if available in all.json")    
-    parser.add_argument("--uwbmap_vicon", action="store_true", help="Plot assisted UWB vicon body pose trajectory if available in all.json")    
-    parser.add_argument("--stride", type=int, default=0, help="Stride to draw trajectory axes (default: 20)")
 
-    parser.add_argument("--accel_bodyframe", action="store_true", help="Display accelerometer vectors rotated into body frame")
-    parser.add_argument("--accel_imuframe", action="store_true", help="Display raw accelerometer vectors")
+    # Stride-based trajectory toggles
+    parser.add_argument("--slam", type=int, default=0,
+                        help="Stride for SLAM trajectory (0 = disable)")
+    parser.add_argument("--synth_slam", type=int, default=0,
+                        help="Stride for Synthetic SLAM trajectory (0 = disable)")
+    parser.add_argument("--vicon", type=int, default=0,
+                        help="Stride for Vicon body trajectory (0 = disable)")
+    parser.add_argument("--vicon_tx", type=int, default=0,
+                        help="Stride for Vicon TX Pose trajectory (0 = disable)")
+    parser.add_argument("--uwbmap_vicon", type=int, default=0,
+                        help="Stride for Assisted UWB Vicon body trajectory (0 = disable)")
 
-    parser.add_argument("--velocity", action="store_true", help="Display velocity vectors rotated into world frame")
+    parser.add_argument("--accel_bodyframe", action="store_true",
+                        help="Display accelerometer vectors rotated into body frame")
+    parser.add_argument("--accel_imuframe", action="store_true",
+                        help="Display raw accelerometer vectors")
+    parser.add_argument("--velocity", action="store_true",
+                        help="Display velocity vectors rotated into world frame")
+
     parser.add_argument("--transforms_json", help="Optional transforms.json file", default=None)
+    parser.add_argument("--calibration", help="Look at calibration", action="store_true")
+
     args = parser.parse_args()
+
 
     SHOW_VICON_STRIDE = True
 
     all_json_path = f"../out/{args.trial_name}_post/all.json"
+    if args.calibration:
+        all_json_path = f"../out/{args.trial_name}_post/calibration.json"
+
     with open(all_json_path, 'r') as f:
         all_data = json.load(f)
 
     transforms_path = f"../out/{args.trial_name}_post/transforms.json"
     with open(transforms_path, 'r') as f:
         Transforms = json.load(f)
-    print(Transforms)
     T_imu_to_body = np.array(Transforms["T_imu_to_body"])
 
     slam_poses = []
@@ -80,10 +93,10 @@ if __name__== "__main__":
     ax = fig.add_subplot(111, projection='3d')
 
     # --- SLAM trajectory ---
-    if args.slam and slam_poses:
+    if slam_poses:
         positions_world = []
         for body_pose in slam_poses:
-            positions_world.append(np.linalg.inv(body_pose)[:3, 3])  # translation
+            positions_world.append(np.linalg.inv(body_pose)[:3, 3])
         positions_world = np.array(positions_world)
 
         ax.plot(positions_world[:, 0], positions_world[:, 1], positions_world[:, 2],
@@ -91,8 +104,8 @@ if __name__== "__main__":
         ax.scatter(*positions_world[0], color='green', label='SLAM Start')
         ax.scatter(*positions_world[-1], color='red', label='SLAM End')
 
-        if args.stride > 0:
-            for i in range(0, len(slam_poses), args.stride):
+        if args.slam > 0:
+            for i in range(0, len(slam_poses), args.slam):
                 draw_axes(ax, slam_poses[i], length=0.4)
 
     # --- Synth SLAM trajectory ---
@@ -112,12 +125,12 @@ if __name__== "__main__":
                 draw_axes(ax, synth_slam_poses[i], length=0.4)
 
     # --- Vicon body frame trajectory ---
-    if args.vicon and vicon_poses:
+    if vicon_poses:
         positions_world = []
         imu_poses = []
         body_poses = []
         for body_pose in vicon_poses:
-            positions_world.append(np.linalg.inv(body_pose)[:3, 3])  # translation
+            positions_world.append(np.linalg.inv(body_pose)[:3, 3])
             body_poses.append(body_pose)
             imu_poses.append(np.linalg.inv(T_imu_to_body) @ body_pose)
         positions_world = np.array(positions_world)
@@ -127,42 +140,41 @@ if __name__== "__main__":
         ax.scatter(*positions_world[0], color='green', marker='^', label='Vicon Start')
         ax.scatter(*positions_world[-1], color='red', marker='^', label='Vicon End')
 
-        # Plotting acceleration vectors
-        skip = 100
-        accel_ts = np.array(accel_ts)
-        accel_vectors = np.array(accel_vectors)
-        for i, (imu_pose, body_pose, vts) in enumerate(zip(imu_poses, body_poses, vicon_ts)):
-            if i % skip == 0:
-                # Find closest accelerometer measurement to pose
-                idx = np.argmin(np.abs(vts -accel_ts))
-
-                # Plot that vector in the body frame
-                if args.accel_bodyframe:
-                    accel_vector_imu_frame = accel_vectors[idx] / np.linalg.norm(accel_vectors[idx]) #unit vector
-                    T_body_to_world = np.linalg.inv(body_pose)
-                    accel_vector_world_frame = T_body_to_world[:3, :3] @ T_imu_to_body[:3,:3] @ (-1 * accel_vector_imu_frame) # rotate vector into world frame
-                    origin = np.linalg.inv(body_pose)[:3,3]
-                    ax.quiver(*origin, *accel_vector_world_frame, color='purple', length=0.3 )
-
-                if args.accel_imuframe:
-                    # Plot vector in the IMU frame
-                    accel_vector_imu_frame = accel_vectors[idx] / np.linalg.norm(accel_vectors[idx]) #unit vector
-                    T_imu_to_world = np.linalg.inv(imu_pose)
-                    accel_vector_world_frame = T_imu_to_world[:3,:3] @ (-1 * accel_vector_imu_frame) # rotate vector into world frame
-                    origin = np.linalg.inv(imu_pose)[:3,3]
-                    ax.quiver(*origin, *accel_vector_world_frame, color='purple', length=0.3 )
-
-        if args.velocity:
-            skip = 100
-            for i, (vpose, velocity_vector) in enumerate(zip(vicon_poses, velocity_vectors)):
-                if i % skip == 0:
-                    v = velocity_vector / 9
-                    origin = np.linalg.inv(vpose)[:3,3]
-                    ax.quiver(*origin, *v, color='pink', length=0.3 )
-
-        if args.stride > 0 and SHOW_VICON_STRIDE:
-            for i in range(0, len(vicon_poses), args.stride):
+        if args.vicon > 0:
+            for i in range(0, len(vicon_poses), args.vicon):
                 draw_axes(ax, vicon_poses[i], length=0.4)
+                # Plotting acceleration vectors
+                skip = 100
+                accel_ts = np.array(accel_ts)
+                accel_vectors = np.array(accel_vectors)
+                for i, (imu_pose, body_pose, vts) in enumerate(zip(imu_poses, body_poses, vicon_ts)):
+                    if i % skip == 0:
+                        # Find closest accelerometer measurement to pose
+                        idx = np.argmin(np.abs(vts -accel_ts))
+
+                        # Plot that vector in the body frame
+                        if args.accel_bodyframe:
+                            accel_vector_imu_frame = accel_vectors[idx] / np.linalg.norm(accel_vectors[idx]) #unit vector
+                            T_body_to_world = np.linalg.inv(body_pose)
+                            accel_vector_world_frame = T_body_to_world[:3, :3] @ T_imu_to_body[:3,:3] @ (-1 * accel_vector_imu_frame) # rotate vector into world frame
+                            origin = np.linalg.inv(body_pose)[:3,3]
+                            ax.quiver(*origin, *accel_vector_world_frame, color='purple', length=0.3 )
+
+                        if args.accel_imuframe:
+                            # Plot vector in the IMU frame
+                            accel_vector_imu_frame = accel_vectors[idx] / np.linalg.norm(accel_vectors[idx]) #unit vector
+                            T_imu_to_world = np.linalg.inv(imu_pose)
+                            accel_vector_world_frame = T_imu_to_world[:3,:3] @ (-1 * accel_vector_imu_frame) # rotate vector into world frame
+                            origin = np.linalg.inv(imu_pose)[:3,3]
+                            ax.quiver(*origin, *accel_vector_world_frame, color='purple', length=0.3 )
+
+                if args.velocity:
+                    skip = 100
+                    for i, (vpose, velocity_vector) in enumerate(zip(vicon_poses, velocity_vectors)):
+                        if i % skip == 0:
+                            v = velocity_vector / 9
+                            origin = np.linalg.inv(vpose)[:3,3]
+                            ax.quiver(*origin, *v, color='pink', length=0.3 )
 
     # --- Vicon TX trajectory ---
     if args.vicon_tx and vicon_tx_poses:
@@ -222,7 +234,7 @@ if __name__== "__main__":
     ax.set_xlim(-2, 2)
     ax.set_ylim(-2,2)
     ax.set_zlim(-2, 2)
-    ax.set_title("Trajectory and Static Coordinate Frames")
+    ax.set_title(f"{all_json_path}")
     ax.view_init(elev=20, azim=45)
     ax.legend()
     plt.show()

@@ -32,7 +32,7 @@ def load_vicon2gt_states(csv_path, stride):
 def draw_axes(ax, T, length=1):
     """Draw coordinate frame axes given a 4x4 transform T."""
     # H = np.linalg.inv(T)  # Draw in world frame convention
-    H = T
+    H = T # Should already be body to world transform
     origin = (H @ np.array([0, 0, 0, 1]))[:3]
     x_axis = (H @ np.array([1, 0, 0, 1]))[:3]
     y_axis = (H @ np.array([0, 1, 0, 1]))[:3]

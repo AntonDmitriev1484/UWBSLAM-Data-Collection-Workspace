@@ -1,0 +1,30 @@
+R_BtoI: 
+          -1            0           -0
+           0  2.22045e-16           -1
+           0           -1 -2.22045e-16
+
+q_BtoI: 
+        0
+ 0.707107
+-0.707107
+        0
+
+p_BinI: 
+0.0175
+ -0.08
+     0
+
+R_GtoV: 
+1 0 0
+0 1 0
+0 0 1
+
+R_GtoV (thetax, thetay): 
+0 0
+
+gravity norm: 
+9.81
+
+t_off_vicon_to_imu: 
+0
+

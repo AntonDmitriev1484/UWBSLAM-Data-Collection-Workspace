@@ -51,6 +51,9 @@ parser.add_argument("--synth_uwb_f", default=0, type=int) # interpolate GT to th
 parser.add_argument("--synth_slam_f", default=0, type=int) #  filter GT to this frequency, must be < 20 should really be named 'lower_slam_frequency'
 parser.add_argument("--synth_vicon_f", default=0, type=int)
 
+parser.add_argument("--leave_slam_frame", action="store_true")
+parser.add_argument("--slam_f", default=0, type=float) # subsample the slam frequency
+
 parser.add_argument("--map_vicon_to_uwb", action="store_true")
 parser.add_argument("--include_vicon_tx_pose", action="store_true")
 parser.add_argument("--vicon_for_worldframing", action="store_true")
@@ -166,7 +169,8 @@ T = SimpleNamespace()
 T.T_vuwb_to_uwbtx = np.eye(4) # Probably better to express as a vector in the vUWB frame
 T.T_vuwb_to_uwbtx[:3, 3] = [0.035, 0, 0] # 3cm down along x-axis.
 
-if args.slam_available:
+T.T_vapril_to_world = np.eye(4)
+if args.slam_available and not args.leave_slam_frame:
     #Transform from vicon marker to the center of an Apriltag
     # I manually selected the center of the apriltag to define the vicon frame
     T.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
@@ -194,18 +198,6 @@ T.T_inertial_to_world = np.eye(4)
 
 if 'irl5_imu_bias' in args.trial_name:
     print("Using irl5_imu_bias vicon2gt calibration")
-    # R_BtoI: 
-    #  -0.998285  0.0519228 -0.0270487
-    #  0.0292611  0.0423338  -0.998675
-    # -0.0507089  -0.997753 -0.0437805
-    # p_BinI: 
-    # 0.000878626
-    #   0.0123712
-    #  -0.0607816
-    # R_GtoV: 
-    #            1 -1.56931e-05 -0.000889414
-    #            0     0.999844   -0.0176416
-    #  0.000889553    0.0176416     0.999844
     T_head_to_imu = np.array([
             [-0.998285,  0.0519228, -0.0270487, 0.000878626],
             [ 0.0292611, 0.0423338,  -0.998675, 0.0123712],
@@ -218,20 +210,24 @@ if 'irl5_imu_bias' in args.trial_name:
         [  0 ,    0.999844 ,  -0.0176416],
         [ 0.000889553 ,   0.0176416  ,   0.999844]]
         )
+elif 'irl5_free2' == args.trial_name:
+    #Use irl5_calibration2
+    print("Use irl5_calibration2 vicon2gt results")
+    T_head_to_imu = np.eye(4)
+    T_head_to_imu[:3,:3] = np.array([  [  -0.996180546165 ,  0.0872390446955 ,-0.00369709652203],
+                                        [0.0128724013916,    0.104847832127,   -0.994404964479],
+                                        [-0.0863633065861 ,  -0.990654471135 ,  -0.105570346672]])
+    T_head_to_imu[:3,3] = np.array(   [0.010305, -0.00379609, -0.0586384])
+    T.T_head_to_body = T_head_to_imu
+
+    T.T_inertial_to_world[:3,:3] = np.array([           
+           [0.999105, 0.000610037,   0.0422917],
+            [0 ,   0.999896 ,  -0.014423],
+            [ -0.0422961 ,  0.0144101 ,   0.999001],]
+    )
+
 else: # For the real irl5 trails
     print("Using irl5 actual trials vicon2gt calibration")
-    # R_BtoI: 
-    # -0.996180546165   0.0872390446955 -0.00369709652203
-    # 0.0128724013916    0.104847832127   -0.994404964479
-    # -0.0863633065861   -0.990654471135   -0.105570346672
-    # p_BinI: # Not going to use this one. Using the other instead
-    # 0.176367654217
-    # 0.377642969634
-    # 0.219567280234
-    # R_GtoV: 
-    # 0.999798194902 0.000372338335535   0.0200855877237
-    #                 0      0.9998282232  -0.0185344029545
-    # -0.0200890385544   0.0185306626175    0.999626452768
     T_head_to_imu = np.eye(4)
     T_head_to_imu[:3,:3] = np.array([  [  -0.996180546165 ,  0.0872390446955 ,-0.00369709652203],
                                         [0.0128724013916,    0.104847832127,   -0.994404964479],
@@ -259,54 +255,86 @@ slam_json = []
 if args.slam_available:
     slam_kf_data = np.loadtxt(in_slam_kf)
     slam_kf_data[:,0] *= 1e-9
-    slam_data = np.loadtxt(in_slam)
+    # Just temporarily
+    # slam_data = np.loadtxt(in_slam)
+    slam_data = np.loadtxt(in_slam_kf)
+    print(f"{slam_data=}")
     slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
     ZERO_TIMESTAMP = slam_data[0][0]
 
-    if not args.vicon_for_worldframing:
-        # Use the apriltag to compute T.T_world_to_sorigin
-        T = extract_apriltag_pose(slam_data, infra1_raw_frames, T, 
-                                        in_kalibr, in_apriltags, 
-                                        T_world_to_tag=np.linalg.inv(T.T_vapril_to_world))
-    else:
-        # Find the closest Vicon pose to the SLAM origin
-        cam1_slam =slam_data # Cam1 w.r.t SLAM origin
-        cam1_vicon = np.array(vicon_data[vicon_name]) # Cam1 w.r.t vicon world origin
+    # if not args.vicon_for_worldframing:
+    #     # Use the apriltag to compute T.T_world_to_sorigin
+    #     T = extract_apriltag_pose(slam_data, infra1_raw_frames, T, 
+    #                                     in_kalibr, in_apriltags, 
+    #                                     T_world_to_tag=np.linalg.inv(T.T_vapril_to_world))
+    # else:
+    #     # Find the closest Vicon pose to the SLAM origin
+    #     cam1_slam =slam_data # Cam1 w.r.t SLAM origin
+    #     cam1_vicon = np.array(vicon_data[vicon_name]) # Cam1 w.r.t vicon world origin
 
-        # Pick the pose for alignment based of the best timestamp sync
-        best_t = np.inf
-        best_vicon_idx = 0
-        best_slam_i = 0
-        for i in range(cam1_slam.shape[0]):
-            timediffs = np.abs( cam1_slam[i,0] - cam1_vicon[:,0])
-            idx = np.argmin(timediffs) # 500 because we need to pick a point AFTER SLAM is initialized
-            if best_t > timediffs[idx]:
-                best_t = timediffs[idx]
-                best_vicon_idx = idx
-                best_slam_i = i
+    #     # Pick the pose for alignment based of the best timestamp sync
+    #     best_t = np.inf
+    #     best_vicon_idx = 0
+    #     best_slam_i = 0
+    #     for i in range(cam1_slam.shape[0]):
+    #         timediffs = np.abs( cam1_slam[i,0] - cam1_vicon[:,0])
+    #         idx = np.argmin(timediffs) # 500 because we need to pick a point AFTER SLAM is initialized
+    #         if best_t > timediffs[idx]:
+    #             best_t = timediffs[idx]
+    #             best_vicon_idx = idx
+    #             best_slam_i = i
         
-        print(f"{best_t=}")
-        T.T_cam1_to_world = slam_quat_to_HTM(cam1_vicon[best_vicon_idx, :])
-        T_cam1_to_sorigin = slam_quat_to_HTM(cam1_slam[best_slam_i, :])
+    #     print(f"{best_t=}")
+    #     T.T_cam1_to_world = slam_quat_to_HTM(cam1_vicon[best_vicon_idx, :])
+    #     T_cam1_to_sorigin = slam_quat_to_HTM(cam1_slam[best_slam_i, :])
 
-        T.T_world_to_sorigin = T_cam1_to_sorigin @ np.linalg.inv(T.T_cam1_to_world)
+    #     T.T_world_to_sorigin = T_cam1_to_sorigin @ np.linalg.inv(T.T_cam1_to_world)
 
-    def slam_tracked_body_to_my_body(T_cam1_to_sorigin): # SLAM quat gives you the transform from cam1 frame to slam origin
-        return T.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin) @ T.T_world_to_sorigin
-    slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
+    if args.leave_slam_frame:
+        def slam_tracked_body_to_my_body(T_cam1_to_sorigin): # SLAM quat gives you the transform from cam1 frame to slam origin
+            return T.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin)
+        slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
+
+        slam_freq = len(slam_data) / (END-args.crop_start) # Just for my specific test case at the moment
+        skip = math.ceil(slam_freq / args.slam_f) # Number of vicon poses to skip in subsampling to synth slam frequency
+        slam_body_poses = np.array(slam_body_poses)
+        slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
 
         # Convert from nparray to json format
-    # Add Vicon poses to all_data
-    slam_json = [ {
-            "t": float(body_pose[0]),
-            "type": "slam_pose",
-            "T_body_world" : body_pose[1:].reshape((4,4)),
-            "v_world": {
-                    "vx": float(body_v[1]),
-                    "vy": float(body_v[2]),
-                    "vz": float(body_v[3])
-            }
-        } for body_pose, body_v in zip( list(slam_body_poses), list(slam_body_velocities))]
+        # Add Vicon poses to all_data
+        slam_json = [ {
+                "t": float(body_pose[0]),
+                "type": "slam_pose",
+                "T_body_world" : body_pose[1:].reshape((4,4)),
+                "v_world": {
+                        "vx": float(body_v[1]),
+                        "vy": float(body_v[2]),
+                        "vz": float(body_v[3])
+                }
+            } for body_pose, body_v in zip( list(slam_body_poses), list(slam_body_velocities))]
+
+    else:
+        def slam_tracked_body_to_my_body(T_cam1_to_sorigin): # SLAM quat gives you the transform from cam1 frame to slam origin
+            return T.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin) @ T.T_world_to_sorigin
+        slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
+
+        slam_freq = len(slam_data) / (END-START)
+        skip = math.ceil(slam_freq / args.slam_f) # Number of vicon poses to skip in subsampling to synth slam frequency
+        slam_body_poses = np.array(slam_body_poses)
+        slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
+
+            # Convert from nparray to json format
+        # Add Vicon poses to all_data
+        slam_json = [ {
+                "t": float(body_pose[0]),
+                "type": "slam_pose",
+                "T_body_world" : body_pose[1:].reshape((4,4)),
+                "v_world": {
+                        "vx": float(body_v[1]),
+                        "vy": float(body_v[2]),
+                        "vz": float(body_v[3])
+                }
+            } for body_pose, body_v in zip( list(slam_body_poses), list(slam_body_velocities))]
 
 ### Write UWB data to its own csv file, and to all_data
 uwb_csv = []
@@ -529,7 +557,7 @@ if args.synth_slam:
         slam_body_poses = np.array(slam_body_poses)
         slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
 
-    else:# For simplicity in testing irl5 imu. It seems the transforms bug out when I set the error params to 0
+    else:# For simplicity in testing irl5 imu. You can just subsample the vicon poses as synthetic SLAM
         slam_body_poses = vicon_body_poses[::skip]
 
     # Add Vicon poses to all_data

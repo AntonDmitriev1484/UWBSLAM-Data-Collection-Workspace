@@ -4,6 +4,9 @@ from utils.math_utils import *
 import copy
 import os
 
+# SOURCE = int(os.environ.get("USER_ID"))
+SOURCE = 1 # for IRL3 trials, although they were collected on NUC2, the decawave had ID 1
+
 def proc_range(msg, arr_ref): #TODO update this to new UWB topic
     msg = msg.ranges[0]
     timestamp = msg.timestamp.sec + (msg.timestamp.nanosec * 1e-9)
@@ -11,7 +14,7 @@ def proc_range(msg, arr_ref): #TODO update this to new UWB topic
     j = {
         "t":timestamp,
         "type": "uwb",
-        "src": int(os.environ.get("USER_ID")),
+        "src": SOURCE,
         "id": msg.id,
         "range": msg.range,
         "exchange": msg.exchange,
@@ -66,7 +69,7 @@ def proc_infra1_frame(msg, arr_ref):
     name = str(timestamp) +".png"
     img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
 
-    j = {"t":timestamp, "type":"infra1", "name":name, "src": int(os.environ.get("USER_ID")), "raw": img_np}
+    j = {"t":timestamp, "type":"infra1", "name":name, "src": SOURCE, "raw": img_np}
     arr_ref.append(j)
 
     return j
@@ -78,7 +81,7 @@ def proc_infra2_frame(msg, arr_ref):
     name = str(timestamp) +".png"
     img_np = np.frombuffer(arr, dtype=np.uint8).reshape((msg.height, msg.width)) # Output says unit8 but encoding says 16UC1
     
-    j = {"t":timestamp, "type":"infra2", "name":name, "src": int(os.environ.get("USER_ID")), "raw": img_np}
+    j = {"t":timestamp, "type":"infra2", "name":name, "src": SOURCE, "raw": img_np}
     arr_ref.append(j)
 
     return j
@@ -90,7 +93,7 @@ def proc_imu(msg, arr_ref):
     # Despite unite_imu being set to 2, there is no 'imu' topic available in the ros2 topics list
 
     timestamp = msg.header.stamp.sec + (msg.header.stamp.nanosec * 1e-9)
-    j = {"t":timestamp, "type":"imu", "src": int(os.environ.get("USER_ID")), "ax": msg.linear_acceleration.x, "ay": msg.linear_acceleration.y, "az": msg.linear_acceleration.z, 
+    j = {"t":timestamp, "type":"imu", "src": SOURCE, "ax": msg.linear_acceleration.x, "ay": msg.linear_acceleration.y, "az": msg.linear_acceleration.z, 
             "gx":msg.angular_velocity.x, "gy": msg.angular_velocity.y, "gz":msg.angular_velocity.z}
 
     arr_ref.append(j)

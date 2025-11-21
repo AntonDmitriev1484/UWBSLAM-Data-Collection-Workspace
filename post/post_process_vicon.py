@@ -38,6 +38,7 @@ parser.add_argument("--trial_name" , "-t", type=str)
 parser.add_argument("--vicon_available", action="store_true")
 parser.add_argument("--slam_available", action="store_true") # If we have no orbslam data, just use vicon for everything instead.
 # Since my code is a mess, I'm going to do this by just aliasing the vicon data into the slam arrays.
+parser.add_argument("--slam_f", default=0, type=float)
 
 parser.add_argument("--calibration_file", "-c", type=str)
 parser.add_argument("--crop_start", default = 0, type=float) # Pass the ROS timestamp that you want to crop away all data before. Data will still be used to compute transforms.
@@ -85,6 +86,8 @@ vicon_data = parse_vicon_csv(in_vicon) # TODO: Write a parsing function for the 
 
 # headset_data contains the pose of the marker I had on the decawave antenna in the world frame.
 
+# SOURCE = int(os.environ.get("USER_ID"))
+SOURCE = 1 # for IRL3 trials, although they were collected on NUC2, the decawave had ID 1
 
 # Need to maintain another array that we can buffer data to before dumping one sensor per csv
 topic_to_processing = {
@@ -154,7 +157,7 @@ def filtt2(arr): # For filtering a CSV output
 T = SimpleNamespace()
 
 
-### IRL3 Vicon Transforms
+### IRL3 Rig and Vicon Transforms
 
 #Transform from vicon marker on anchor, to the center of the DW1000 UWB chip
 T.T_vuwb_to_uwbtx = np.eye(4) # Probably better to express as a vector in the vUWB frame
@@ -168,18 +171,22 @@ T.T_vapril_to_world = slam_quat_to_HTM(vicon_data["April7"][0])
 
 T.T_vcam1_to_cam1 = np.eye(4) # This trial tracked cam1 with the markers on the camera (roughly)
 
-T.T_cam1_to_uwb = np.eye(4) # TODO: Unclear
+T.T_cam1_to_uwb = np.eye(4) # T_cam1_to_uwb = [R_cam1_to_uwb | t_uwb_to_cam1]
+T.T_cam1_to_uwb[:3, 3] = np.array([0.0725, 0.03, 0.061])
 
 # Transforms I'm defining
 
-
 T.T_imu_to_body = np.eye(4) # IMU is the body frame, like I defined for the IRL5 trials
+T.T_body_to_imu = np.linalg.inv(T.T_imu_to_body)
 
 with open(in_kalibr, 'r') as fs: calibration = yaml.safe_load(fs)
 T.T_imu_to_cam1 = np.array(calibration['cam0']['T_cam_imu'])
 T.T_cam1_to_body = np.linalg.inv(T.T_imu_to_cam1)
 
 T.T_body_to_decawave = T.T_cam1_to_uwb @ T.T_imu_to_cam1
+
+# Since SLAM frame is assumed to be gravity aligned, and we're mainly using this for SLAM
+T.T_inertial_to_world = np.eye(4)
 
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
 # Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
@@ -203,12 +210,18 @@ if args.slam_available:
 
     slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
 
+    if args.slam_f != 0:
+        slam_freq = len(slam_data) / (END-args.crop_start) # Just for my specific test case at the moment
+        skip = math.ceil(slam_freq / args.slam_f) # Number of vicon poses to skip in subsampling to synth slam frequency
+        slam_body_poses = np.array(slam_body_poses)
+        slam_body_poses = slam_body_poses[::skip] # Finally, subsample to required frequency
+    
         # Convert from nparray to json format
     # Add Vicon poses to all_data
     slam_json = [ {
             "t": float(body_pose[0]),
             "type": "slam_pose",
-            "src": int(os.environ.get("USER_ID")),
+            "src": SOURCE,
             "T_body_world" : body_pose[1:].reshape((4,4)),
             "v_world": {
                     "vx": float(body_v[1]),
@@ -243,6 +256,7 @@ if args.vicon_available:
     vicon_json = [ {
             "t": float(body_pose[0]),
             "type": "vicon_pose",
+            "src": SOURCE,
             "T_body_world" : body_pose[1:].reshape((4,4)),
             "v_world": {
                     "vx": float(body_v[1]),
@@ -267,6 +281,7 @@ if args.include_vicon_tx_pose:
     vicon_uwbtx_json = [ {
         "t": float(body_pose[0]),
         "type": "vicon_tx_pose",
+        "src": SOURCE,
         "T_body_world" : body_pose[1:].reshape((4,4)),
     } for body_pose in list(vicon_tx_poses)]
 
@@ -278,7 +293,8 @@ infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
 ### Add synthetic ranges inter-anchor, since we weren't able to record the raw ranges
 
-ids = [1,3,4]
+# ids = [1,3,4]
+ids = [2,3,4] # For IRL3 trials, NUC2 was connected to anchor ID=1
 f_uwb = 5 # 5hz
 dt_uwb = 1/f_uwb
 
@@ -312,6 +328,7 @@ for src in ids:
             j = {
                 "t":timestamps[i],
                 "type": "uwb",
+                "tag":"synth_for_anchors",
                 "src": src,
                 "id": dst,
                 "range": ranges[i]
@@ -373,6 +390,9 @@ with open(f'{outpath}/transforms.json', 'w') as fs: json.dump(vars(T), fs, cls=N
 print("Checking frequency of real data")
 print(f" Measured UWB frequency {uwb_message_count / (END-START)}")
 print(f" Measured vicon frequency {len(vicon_data['LeftRS']) / (END-START)}")
+
+if args.slam_available:
+    print(f" Measured SLAM frequency {len(slam_json) / (END-START)}")
 
 # Filter to make sure all messages ( and data jsons ) fall within the ROS recording time interval, (because some of them don't apparently)
 all_data = filtt(all_data)

@@ -143,6 +143,12 @@ vicon_data = crop_vicon(vicon_data, START, END)
 mobile_objects = ["LeftRS", "UWB1"]
 vicon_data = clean_vicon(vicon_data)
 
+if args.trial_name == "irl3_loops":
+    # In the Vicon, you accidentally mis-tagged nodes 2 and 4 for this trial
+    temp = vicon_data["UWB2"]
+    vicon_data["UWB2"] = vicon_data["UWB4"]
+    vicon_data["UWB4"] = temp
+
 # Need to adjust vicon data to actual timestamps instead of just frame indices
 
 def filtt(arr): # For filtering a json output
@@ -155,6 +161,8 @@ def filtt2(arr): # For filtering a CSV output
 
 ### Define all coordinate transforms
 T = SimpleNamespace()
+
+# def extract_apriltag_pose(slam_data, infra1_raw_frames, Transforms, in_kalibr, in_apriltags, T_world_to_tag=None):
 
 
 ### IRL3 Rig and Vicon Transforms
@@ -204,6 +212,13 @@ if args.slam_available:
     slam_data[:,0] *= 1e-9 # Adjust timestamps to be in 's'
     ZERO_TIMESTAMP = slam_data[0][0]
 
+
+    # Compute T_slam_to_world, useful for mapping vicon anchor locations to world frame
+    infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
+    extract_apriltag_pose(slam_data, infra1_raw_frames, T, 
+                                in_kalibr, in_apriltags, 
+                                T_world_to_tag=np.linalg.inv(T.T_vapril_to_world))
+
     def slam_tracked_body_to_my_body(T_cam1_to_sorigin):
         return T.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin)
     # Our output body poses will be the IMU in the SLAM frame.
@@ -234,6 +249,7 @@ if args.slam_available:
 uwb_csv = []
 uwb_range_distribution = []
 uwb_json = aggregate_uwb(topic_to_processing, uwb_csv, uwb_range_distribution)
+
 with open(f'{out_ml}/uwb_data.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(uwb_csv))
 
 ### Write IMU data to its own csv file, and to all_data
@@ -268,6 +284,7 @@ if args.vicon_available:
 # If we're using real UWB ranges, but have no compass
 # We interpolate on SLAM poses to match a synthetic orientation to that UWB range
 assisted_uwb_json = []
+synth_user_anchor_ranges = []
 if args.map_vicon_to_uwb:
     assisted_uwb_json = aggregate_assisted_uwb(uwb_json, vicon_tracked_body_to_my_body, np.array(vicon_data["LeftRS"]), 100)
 
@@ -290,6 +307,10 @@ infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
 
 ### Write Infra2 frames to output directory, and provide references in all_data
 infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
+
+### Add synthetic anchors to the vicon_data
+
+# vicon_data["UWB5"]
 
 ### Add synthetic ranges inter-anchor, since we weren't able to record the raw ranges
 
@@ -338,9 +359,39 @@ for src in ids:
         synth_inter_anchor_ranges = synth_inter_anchor_ranges + synth_ranges
 
 
+synth_user_anchor_ranges = []
+for u in uwb_json:
+
+    # find the closest timestamp to this uwb range
+    # get the vicon poses for user antenna and the corresponding anchor
+
+    t = u["t"]
+    dst = u["id"]
+    real_range = u["range"]
+    data = np.array(vicon_data[f"LeftRS"])
+    anchor_data = np.array(vicon_data[f"UWB{dst}"])
+    vicon_timestamps = data[:,0]
+    tdiffs = np.abs(vicon_timestamps - t)
+    idx = np.argmin(tdiffs) # Get closest pose in time to this range
+
+    T_body_to_world_tum = data[idx] # TUM body pose
+    T_body_to_world = slam_quat_to_HTM(T_body_to_world_tum)
+    T_decawave_to_world = T_body_to_world @ np.linalg.inv(T.T_body_to_decawave) # compute tag decawave_to_world from body_to_world pose
+
+    dest_position = get_tx_position(T.T_vuwb_to_uwbtx, anchor_data) # get anchor point
+    source_position = T_decawave_to_world[:3,3] # get tag point
+
+    synth_range = np.linalg.norm(dest_position -  source_position)
+
+    # print(f"{real_range=} {synth_range=}")
+
+    u2 = copy.deepcopy(u)
+    u2["type"] = "synth_uwb"
+    u2["range"] = synth_range
+    synth_user_anchor_ranges.append(u2)
 
     # Compose the final factor graph dataset
-all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges
+all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges
 
 # TODO: Weird error, I will come back to this later.
 # vicon_body_poses_tum = [ slam_HTM_to_TUM(pose) for pose in vicon_body_poses]
@@ -365,7 +416,7 @@ for tracked_name, data in vicon_data.items():
         # Compute the tx point over all poses, then average them.
         uwb_tx_position = get_tx_position(T.T_vuwb_to_uwbtx, data)
         world_frame_anchors.append({
-            "ID": tracked_name.replace("UWB", ""),
+            "id": int(tracked_name.replace("UWB", "")),
             "position": uwb_tx_position
         })
     if "April" in tracked_name:
@@ -374,6 +425,10 @@ for tracked_name, data in vicon_data.items():
 
 out_anchors = open(f'{out_world}/anchors_{args.trial_name}.json', 'w')
 json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
+
+out_anchors = open(f'{outpath}/gt_anchors_{args.trial_name}.json', 'w')
+json.dump(world_frame_anchors, out_anchors, cls=NumpyEncoder, indent=1)
+
 out_anchors_trial = open(f'{outpath}/anchors.json', 'w')
 json.dump(world_frame_anchors, out_anchors_trial, cls=NumpyEncoder, indent=1)
 

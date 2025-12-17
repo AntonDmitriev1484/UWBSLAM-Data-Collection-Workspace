@@ -303,19 +303,31 @@ if args.include_vicon_tx_pose:
     } for body_pose in list(vicon_tx_poses)]
 
 ### Write Infra1 frames to output directory, and provide references in all_data
-infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
+# infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
 
 ### Write Infra2 frames to output directory, and provide references in all_data
-infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
+# infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
 ### Add synthetic anchors to the vicon_data
+
+# synth_anchors = {"UWB5": [ -1, 1, 0], "UWB6":[ 1, -2, 3], "UWB7": [0,3,2.5]}
+synth_anchors = {"UWB5": [ -1, 1, 0]}
+# synth_anchors = {}
+
+for id, p in synth_anchors.items():
+    # list of tum poses
+    N_poses = len(vicon_data["UWB2"])
+    # p is t_world_to_body in world , so making it into a pose would give us T_body_to_world
+    vicon_data[id] = [ [0, p[0], p[1], p[2], 0, 0, 0, 1] for i in range(0, N_poses) ]
 
 # vicon_data["UWB5"]
 
 ### Add synthetic ranges inter-anchor, since we weren't able to record the raw ranges
 
-# ids = [1,3,4]
-ids = [2,3,4] # For IRL3 trials, NUC2 was connected to anchor ID=1
+# ids = [2,3,4, 5, 6, 7] # For IRL3 trials, NUC2 was connected to anchor ID=1
+ids = [2,3,4, 5] # For IRL3 trials, NUC2 was connected to anchor ID=1
+# ids = [2,3,4]
+
 f_uwb = 5 # 5hz
 dt_uwb = 1/f_uwb
 
@@ -330,18 +342,13 @@ for src in ids:
         source = f"UWB{src}"
         dest = f"UWB{dst}"
 
-        # Vicon_data is TUM formatted body_to_world
-        # MAKE SURE THE INDEX YOU PICK IS RIGHT
-        # If the 0th pose is bugged then all of the synthetic data will be wrong
-        source_pose = slam_quat_to_HTM(vicon_data[source][0]) # UWB -> vicon world
-        dest_pose = slam_quat_to_HTM(vicon_data[dest][0])
-
-        source_position = T.T_vuwb_to_uwbtx @ np.linalg.inv(source_pose) # T_vuwb_to_tx X T_vworld_to_vuwb T_vworld_to_tx
-        dest_position = T.T_vuwb_to_uwbtx @ np.linalg.inv(dest_pose)
-
-        dist = np.linalg.norm(source_position - dest_position) # Compute distances between transmitters in the vicon world frame.
-        stdev = 0.2
-        ranges = np.random.normal(loc=dist, scale=stdev, size=N_ranges)
+        source_pos = get_tx_position(T.T_vuwb_to_uwbtx, vicon_data[source])
+        dest_pos = get_tx_position(T.T_vuwb_to_uwbtx, vicon_data[dest])
+        dist = np.linalg.norm(source_pos - dest_pos ) # Compute distances between transmitters in the vicon world frame.
+        
+        # stdev = 0.2
+        # ranges = np.random.normal(loc=dist, scale=stdev, size=N_ranges)
+        ranges = np.array([dist for i in range(0, timestamps.shape[0])])
 
         ## NEEED to label src and dest ids now.
         synth_ranges = []
@@ -354,49 +361,88 @@ for src in ids:
                 "id": dst,
                 "range": ranges[i]
             }
-
             synth_ranges.append(j)
         synth_inter_anchor_ranges = synth_inter_anchor_ranges + synth_ranges
 
+    # Somehow these aren't lining up with the norm I take in plot_all
+    # I think the distances herre are being generated properly, but some how the indices get re-assigned in a later loop?
 
+
+# Build one synthetic range off of each real range.
 synth_user_anchor_ranges = []
 for u in uwb_json:
+    if u["src"] == 1: # Exclude any anchor->anchor ranges
 
-    # find the closest timestamp to this uwb range
-    # get the vicon poses for user antenna and the corresponding anchor
+        # find the closest timestamp to this uwb range
+        # get the vicon poses for user antenna and the corresponding anchor
 
-    t = u["t"]
-    dst = u["id"]
-    real_range = u["range"]
-    data = np.array(vicon_data[f"LeftRS"])
-    anchor_data = np.array(vicon_data[f"UWB{dst}"])
-    vicon_timestamps = data[:,0]
-    tdiffs = np.abs(vicon_timestamps - t)
-    idx = np.argmin(tdiffs) # Get closest pose in time to this range
+        t = u["t"]
+        dst = u["id"]
+        real_range = u["range"]
+        data = np.array(vicon_data[f"LeftRS"])
+        anchor_data = np.array(vicon_data[f"UWB{dst}"])
+        vicon_timestamps = data[:,0]
+        tdiffs = np.abs(vicon_timestamps - t)
+        idx = np.argmin(tdiffs) # Get closest pose in time to this range
 
-    T_body_to_world_tum = data[idx] # TUM body pose
-    T_body_to_world = slam_quat_to_HTM(T_body_to_world_tum)
-    T_decawave_to_world = T_body_to_world @ np.linalg.inv(T.T_body_to_decawave) # compute tag decawave_to_world from body_to_world pose
+        T_body_to_world_tum = data[idx] # TUM body pose
+        T_body_to_world = slam_quat_to_HTM(T_body_to_world_tum)
+        T_decawave_to_world = T_body_to_world @ np.linalg.inv(T.T_body_to_decawave) # compute tag decawave_to_world from body_to_world pose
 
-    dest_position = get_tx_position(T.T_vuwb_to_uwbtx, anchor_data) # get anchor point
-    source_position = T_decawave_to_world[:3,3] # get tag point
+        dest_position = get_tx_position(T.T_vuwb_to_uwbtx, anchor_data) # get anchor point
+        source_position = T_decawave_to_world[:3,3] # get tag point
 
-    synth_range = np.linalg.norm(dest_position -  source_position)
+        dist = np.linalg.norm(dest_position -  source_position)
+        # stdev = 0.2
+        # synth_range = np.random.normal(loc=dist, scale=stdev)
+        synth_range = dist
 
-    # print(f"{real_range=} {synth_range=}")
+        # print(f"{real_range=} {synth_range=}")
 
-    u2 = copy.deepcopy(u)
-    u2["type"] = "synth_uwb"
-    u2["range"] = synth_range
-    synth_user_anchor_ranges.append(u2)
+        u2 = copy.deepcopy(u)
+        u2["type"] = "synth_uwb"
+        u2["range"] = synth_range
+        synth_user_anchor_ranges.append(u2)
+
+# Add ranges to synthetic anchors to the total synthetic ranges array
+for dst_key, pos in synth_anchors.items():
+
+    timestamps = np.arange(START, END, dt_uwb)
+    N_ranges = timestamps.shape[0]
+
+    user_data = np.array(vicon_data[f"LeftRS"])
+    anchor_data = np.array(vicon_data[dst_key])
+    
+    for i in range(0, timestamps.shape[0]):
+        t = timestamps[i]
+        dst = int(dst_key[3])
+        
+        vicon_timestamps = user_data[:,0]
+        tdiffs = np.abs(vicon_timestamps - t)
+        idx = np.argmin(tdiffs) # Get closest vicon pose to this timestamp
+
+        T_body_to_world_tum = user_data[idx] # TUM body pose
+        T_body_to_world = slam_quat_to_HTM(T_body_to_world_tum)
+        T_decawave_to_world = T_body_to_world @ np.linalg.inv(T.T_body_to_decawave) # compute tag decawave_to_world from body_to_world pose
+
+        dest_position = get_tx_position(T.T_vuwb_to_uwbtx, anchor_data) # get anchor point
+        source_position = T_decawave_to_world[:3,3] # get tag point
+
+        synth_range = np.linalg.norm(dest_position -  source_position)
+
+        j = {
+            "t":t,
+            "type": "synth_uwb",
+            "tag": "synth_for_user",
+            "src": SOURCE,
+            "id": dst,
+            "pose": T_decawave_to_world, 
+            "range": synth_range
+        }
+        synth_user_anchor_ranges.append(j)
 
     # Compose the final factor graph dataset
-all_data = uwb_json + imu_json + infra1_json + infra2_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges
-
-# TODO: Weird error, I will come back to this later.
-# vicon_body_poses_tum = [ slam_HTM_to_TUM(pose) for pose in vicon_body_poses]
-# with open(f'{out_ml}/vbody_poses_world_frame.csv', 'w') as fs: csv.writer(fs).writerows(filtt2(vicon_body_poses))
-# with open(f'{outpath}/vbody_poses_world_frame_tum.txt', 'w') as fs: csv.writer(fs, delimiter=' ').writerows(filtt2(vicon_body_poses_tum))
+all_data = uwb_json + imu_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -412,6 +458,7 @@ class NumpyEncoder(json.JSONEncoder):
 world_frame_anchors = []
 world_frame_tags = {}
 for tracked_name, data in vicon_data.items():
+    # Output all anchors to file, including synthetic anchors
     if "UWB" in tracked_name and tracked_name not in mobile_objects:
         # Compute the tx point over all poses, then average them.
         uwb_tx_position = get_tx_position(T.T_vuwb_to_uwbtx, data)

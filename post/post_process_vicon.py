@@ -29,6 +29,8 @@ from utils.vicon_utils import *
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
+from synth_anchor_priors import *
+
 # Example usage:
 # python3 post_process_vicon.py --trial_name irl3_los_walking --vicon_trial_name irl3_los_walking --map_vicon_to_uwb --no_orbslam True -c cam_target_daslab
 
@@ -196,10 +198,6 @@ T.T_body_to_decawave = T.T_cam1_to_uwb @ T.T_imu_to_cam1
 # Since SLAM frame is assumed to be gravity aligned, and we're mainly using this for SLAM
 T.T_inertial_to_world = np.eye(4)
 
-# Transforms.T_body_to_decawave[:3,3] = np.array([-0.045, -0.15, -0.025]) # For uwb_calibration_trans
-# Transforms.T_body_to_decawave[:3,3] = np.array([-0.12, 0.015, -0.1])
-
-
 infra1_raw_frames = topic_to_processing['/camera/camera/infra1/image_rect_raw'][1]
 
 all_data_synthetic = [] # Keep interpolated points in a separate file from all.json
@@ -221,7 +219,8 @@ if args.slam_available:
 
     def slam_tracked_body_to_my_body(T_cam1_to_sorigin):
         return T.T_cam1_to_body @ np.linalg.inv(T_cam1_to_sorigin)
-    # Our output body poses will be the IMU in the SLAM frame.
+    # Our output body poses will be the IMU in the SLAM frame. # T_sorigin_to_imu, because thats what my plotting assumes
+    # We later re-invert this to be T_imu_to_sorigin before using it in the graph.
 
     slam_body_poses, slam_body_velocities = aggregate_tracker(slam_tracked_body_to_my_body, slam_data)
 
@@ -302,17 +301,12 @@ if args.include_vicon_tx_pose:
         "T_body_world" : body_pose[1:].reshape((4,4)),
     } for body_pose in list(vicon_tx_poses)]
 
-### Write Infra1 frames to output directory, and provide references in all_data
-# infra1_json = aggregate_infra1(topic_to_processing, out_infra1)
-
-### Write Infra2 frames to output directory, and provide references in all_data
-# infra2_json = aggregate_infra2(topic_to_processing, out_infra2)
 
 ### Add synthetic anchors to the vicon_data
 
 # synth_anchors = {"UWB5": [ -1, 1, 0], "UWB6":[ 1, -2, 3], "UWB7": [0,3,2.5]}
-synth_anchors = {"UWB5": [ -1, 1, 0]}
-# synth_anchors = {}
+# synth_anchors = {"UWB5": [ -1, 1, 0]}
+synth_anchors = {}
 
 for id, p in synth_anchors.items():
     # list of tum poses
@@ -325,8 +319,8 @@ for id, p in synth_anchors.items():
 ### Add synthetic ranges inter-anchor, since we weren't able to record the raw ranges
 
 # ids = [2,3,4, 5, 6, 7] # For IRL3 trials, NUC2 was connected to anchor ID=1
-ids = [2,3,4, 5] # For IRL3 trials, NUC2 was connected to anchor ID=1
-# ids = [2,3,4]
+# ids = [2,3,4, 5] # For IRL3 trials, NUC2 was connected to anchor ID=1
+ids = [2,3,4]
 
 f_uwb = 5 # 5hz
 dt_uwb = 1/f_uwb
@@ -346,16 +340,16 @@ for src in ids:
         dest_pos = get_tx_position(T.T_vuwb_to_uwbtx, vicon_data[dest])
         dist = np.linalg.norm(source_pos - dest_pos ) # Compute distances between transmitters in the vicon world frame.
         
-        # stdev = 0.2
-        # ranges = np.random.normal(loc=dist, scale=stdev, size=N_ranges)
-        ranges = np.array([dist for i in range(0, timestamps.shape[0])])
+        stdev = 0.2
+        ranges = np.random.normal(loc=dist, scale=stdev, size=N_ranges)
+        # ranges = np.array([dist for i in range(0, timestamps.shape[0])]) # 0 error ranges
 
         ## NEEED to label src and dest ids now.
         synth_ranges = []
         for i in range(ranges.shape[0]):
             j = {
                 "t":timestamps[i],
-                "type": "uwb",
+                "type": "synth_uwb",
                 "tag":"synth_for_anchors",
                 "src": src,
                 "id": dst,
@@ -441,8 +435,9 @@ for dst_key, pos in synth_anchors.items():
         }
         synth_user_anchor_ranges.append(j)
 
+
     # Compose the final factor graph dataset
-all_data = uwb_json + imu_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges
+all_data = uwb_json + imu_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges + compute_synth_visual_anchor_priors()
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):

@@ -435,9 +435,11 @@ for dst_key, pos in synth_anchors.items():
         }
         synth_user_anchor_ranges.append(j)
 
-
+# 2 priors per anchor, stdev is 20cm
+synth_visual_anchor_priors = compute_synth_visual_anchor_priors(START, END, 0.1, 2)
     # Compose the final factor graph dataset
-all_data = uwb_json + imu_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges + compute_synth_visual_anchor_priors()
+
+all_data = uwb_json + imu_json + vicon_json + slam_json + assisted_uwb_json + vicon_uwbtx_json + synth_inter_anchor_ranges + synth_user_anchor_ranges + synth_visual_anchor_priors
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
